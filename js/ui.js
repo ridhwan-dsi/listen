@@ -25,6 +25,9 @@
     phone: '<rect x="7" y="3" width="10" height="18" rx="2"/><path d="M11 18h2"/>',
     out: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/>',
     trash: '<path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/>',
+    x: '<path d="M6 6l12 12M18 6 6 18"/>',
+    more: '<circle cx="5" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="19" cy="12" r="1.2"/>',
+    sel: '<rect x="4" y="4" width="16" height="16" rx="4"/><path d="m8.5 12 2.5 2.5 4.5-5"/>',
     ext: '<path d="M14 4h6v6M20 4l-9 9M19 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5"/>'
   };
   var PLAY = '<svg viewBox="0 0 24 24"><path d="M7 4.5v15l13-7.5z"/></svg>';
@@ -101,6 +104,7 @@
     return '<svg width="' + sz + '" height="' + sz + '" viewBox="0 0 ' + sz + ' ' + sz + '"><circle cx="' + m + '" cy="' + m + '" r="' + r + '" fill="none" stroke="' + (col === '#fff' ? '#ffffff40' : 'color-mix(in srgb,var(--tx) 16%,transparent)') + '" stroke-width="3"/>' +
       '<circle cx="' + m + '" cy="' + m + '" r="' + r + '" fill="none" stroke="' + (col || 'var(--ac)') + '" stroke-width="3" stroke-linecap="round" stroke-dasharray="' + (C * p / 100).toFixed(1) + ' ' + C.toFixed(1) + '" transform="rotate(-90 ' + m + ' ' + m + ')"/></svg>';
   }
+  var DLK = '<svg class="dlk" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="currentColor"/><path d="M12 7v8m0 0-3.5-3.5M12 15l3.5-3.5" stroke="var(--bg)" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>';
   var CHECK = '<svg width="34" height="34" viewBox="0 0 34 34"><circle cx="17" cy="17" r="14" fill="var(--ac)"/><path d="m11 17 4 4 8-8" stroke="var(--on)" stroke-width="2.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
   function hms(s) { s = Math.max(0, Math.floor(s || 0)); var h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), x = s % 60; return (h ? h + ':' + (m < 10 ? '0' : '') : '') + m + ':' + (x < 10 ? '0' : '') + x; }
@@ -118,6 +122,6 @@
     return s.length > 1 ? s : t;
   }
 
-  window.UI = { I: I, ic: ic, rw: rw, ff: ff, esc: esc, PLAY: PLAY, PAUSE: PAUSE, PREV: PREV, NEXT: NEXT, CHECK: CHECK,
+  window.UI = { I: I, ic: ic, rw: rw, ff: ff, esc: esc, PLAY: PLAY, PAUSE: PAUSE, PREV: PREV, NEXT: NEXT, CHECK: CHECK, DLK: DLK,
     coverInfo: coverInfo, cover: cover, seg: seg, ring: ring, hms: hms, dur: dur, hrs: hrs, ago: ago, mb: mb, title: title, hash: hash };
 })();

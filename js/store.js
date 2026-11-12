@@ -4,10 +4,11 @@
    prog[fileId]= { p: position s, d: duration s, done, s: seriesId, u }
    lib         = { id, name, u }  — the Library parent folder (signed in only)
    now         = { s, f, u }      — the lecture loaded in the player
-   Local only: ui (tab, view, scroll), cache (folder listings — see drive.js). */
+   Local only: ui (tab, view, scroll), cache (folder listings — see drive.js),
+   dl = { mob: allow mobile data 0|1, kept: { fileId: { s: seriesId, at } } } — downloads belong to this device. */
 (function () {
   var KEY = 'alp.v1', SCHEMA = 1;
-  function blank() { return { schema: SCHEMA, acct: null, settings: { theme: 'midnight', tint: true }, su: 0, series: {}, prog: {}, lib: null, now: null, ui: { tab: 'listen' } }; }
+  function blank() { return { schema: SCHEMA, acct: null, settings: { theme: 'midnight', tint: true }, su: 0, series: {}, prog: {}, lib: null, now: null, ui: { tab: 'listen' }, dl: { mob: 0, kept: {} } }; }
   var S = {
     d: null, dirty: false,
     load: function () {
@@ -19,9 +20,10 @@
       var d = this.d, b = blank();
       Object.keys(b).forEach(function (k) { if (d[k] === undefined) d[k] = b[k]; });
       if (!d.ui) d.ui = { tab: 'listen' };
+      if (!d.dl.kept) d.dl.kept = {};
       d.schema = SCHEMA;
     },
-    reset: function (acct) { var ui = this.d.ui, st = this.d.settings; this.d = blank(); this.d.acct = acct; this.d.ui = ui; this.d.settings = st; this.persist(); },
+    reset: function (acct) { var ui = this.d.ui, st = this.d.settings, dl = this.d.dl; this.d = blank(); this.d.acct = acct; this.d.ui = ui; this.d.settings = st; this.d.dl = dl; this.persist(); },
     persist: function () { try { localStorage.setItem(KEY, JSON.stringify(this.d)); } catch (e) { console.warn('save failed', e); } },
     save: function () { this.dirty = true; this.persist(); if (window.Sync) Sync.schedule(); },
     saveUi: function () { this.persist(); },
@@ -59,7 +61,7 @@
       if ((r.su || 0) > (L.su || 0)) { L.settings = r.settings; L.su = r.su; }
       this.dirty = true; this.persist();
     },
-    exportData: function () { var c = JSON.parse(JSON.stringify(this.d)); delete c.ui; return c; }
+    exportData: function () { var c = JSON.parse(JSON.stringify(this.d)); delete c.ui; delete c.dl; return c; }
   };
   window.Store = S;
 })();

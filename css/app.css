@@ -230,3 +230,31 @@ svg.i{width:20px;height:20px;stroke:var(--tx);fill:none;stroke-width:2;stroke-li
 .rr{display:flex;justify-content:flex-end;align-items:center;gap:10px}
 .kb{font-size:11px;color:var(--mu);font-weight:600;line-height:2}.kb b{border:1px solid var(--ln);background:var(--s2);border-radius:5px;padding:1px 6px;margin:0 2px;color:var(--tx)}
 .dk .ib:hover,.dk .cb:hover,.dk .sk:hover{filter:brightness(1.25)}
+
+/* downloads (v2) */
+.offt{display:flex;align-items:center;gap:10px;flex:1;min-width:0}
+.fl .mo{width:34px;height:34px;display:flex;align-items:center;justify-content:center;flex:none;margin-right:-8px;color:var(--mu)}
+.fl .mo svg{width:20px;height:20px}
+.ofk,.ofa{display:inline-flex;color:var(--ac)}.ofk svg,.ofa svg{width:13px;height:13px}.ofe{color:#ff6b6b;font-weight:800}
+.box{width:26px;height:26px;border-radius:8px;border:2px solid var(--mu);display:flex;align-items:center;justify-content:center;flex:none}
+.box.on{background:var(--ac);border-color:var(--ac)}.box svg{width:18px;height:18px}
+.selbar{display:flex;align-items:center;gap:16px;margin:14px 16px 4px;padding:10px 14px;border-radius:14px;background:var(--s2);font-size:13px;font-weight:700}
+.selbar b{margin-right:auto}.selbar span{color:var(--ac);cursor:pointer}
+.selgo{position:sticky;bottom:calc(var(--nav) + var(--safe) + 8px);padding:12px 16px 4px;z-index:3}
+.ph:has(.selgo) .mini{display:none}   /* while choosing, the action button takes the mini player's place */
+.selgo .res{box-shadow:0 10px 30px -8px #000}
+.opt{display:flex;align-items:center;gap:12px;padding:13px 14px;margin-top:10px;border-radius:16px;background:var(--s2);font-size:14px;font-weight:700;cursor:pointer}
+.opt .tx{flex:1;min-width:0}.opt small{display:block;color:var(--mu);font-weight:500;font-size:11.5px;margin-top:2px}
+.opt .dlk{width:22px;height:22px;color:var(--ac)}
+.tag{display:inline-block;font-size:9.5px;font-weight:800;letter-spacing:.07em;text-transform:uppercase;padding:1px 6px;border-radius:6px;background:var(--s2);color:var(--mu);margin-right:6px;vertical-align:1px}
+.tag.k{background:var(--ac);color:var(--on)}
+.ib.sm{width:32px;height:32px;background:var(--s2)}.ib.sm svg{width:16px;height:16px}
+.it .tx{flex:1;min-width:0}
+.dgp{margin-top:10px}.it.dl2{padding-left:68px}.it.dl2.s{padding-left:16px}
+.chev{display:flex;color:var(--mu)}.chev svg{width:18px;height:18px;transition:transform .15s}.chev.up svg{transform:rotate(180deg)}
+.qbar{height:3px;border-radius:2px;background:var(--ln);margin-top:7px;overflow:hidden}.qbar b{display:block;height:100%;background:var(--ac)}
+.res.red{background:#e5484d;color:#fff}.res.red2{color:#ff6b6b}
+.dbtns{display:flex;flex-direction:column;gap:10px;margin:18px 16px 0}
+.dk .dbtns{margin:18px 0 0;max-width:640px}.dk .selbar{margin:14px 0 4px}.dk .selgo{bottom:12px;padding:12px 0 4px;max-width:640px}
+.num .box svg,.box svg{position:static;width:18px;height:18px}
+.dbtns .res,.selgo .res{flex:none;width:100%}
