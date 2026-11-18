@@ -2,11 +2,11 @@
    Phone: 5 tabs + bottom nav + mini player; series / player / settings / folder picker are views on a stack
    (Android back pops them). Desktop: an explicit switch (wide screens only) — sidebar · main · now playing · bottom bar. */
 (function () {
-  var S = window.Store, D = window.Drive, P = window.Player, C = window.APP_CONFIG, Sync = window.Sync;
+  var S = window.Store, D = window.Drive, P = window.Player, C = window.APP_CONFIG, Sync = window.Sync, Local = window.Local, Up = window.Up;
   var E = UI.esc, ic = UI.ic, U;
   var root = document.getElementById('app');
-  var V = [];                  // view stack: {t:'series',id} | {t:'player'} | {t:'settings'} | {t:'downloads'} | {t:'picker',path,items}
-  var SEL = null, DSEL = null, DEXP = {}, DLS = null, PEND = null, lp = null, lpFired = false;   // download selection, Downloads screen
+  var V = [];                  // view stack: {t:'series',id} | {t:'fdl',id} (its Downloads page) | {t:'player'} | {t:'settings'} | {t:'downloads'} | {t:'picker',path,items}
+  var DSEL = null, DEXP = {}, DLS = null, PEND = null, lastCheck = 0;   // Downloads screen selection; last Drive check of whole-folder series
   var dlgHtml = null, bip = null, after = [], closing = false, drag = null, holdT = null, SC = {}, lastTick = 0, rq = 0, tried = {};
   var TABS = [['listen', 'head', 'Listening'], ['star', 'star', 'Starred'], ['lib', 'lib', 'Library'], ['shared', 'sh', 'Shared'], ['fin', 'done', 'Finished']];
   var THEMES = [['midnight', 'Midnight', '#07090d', '#1a2029', '#3ba7ff'], ['emerald', 'Emerald', '#05100c', '#15291f', '#d9b25a'], ['dusk', 'Dusk', '#0d0a14', '#221a33', '#b68cff'], ['sand', 'Sand', '#f5efe3', '#e3d7c0', '#b4612a']];
@@ -52,7 +52,7 @@
     var l = inProgress(); return l.length ? l[0].id : null;
   }
   function lecNo(sid) { var fid = P.s === sid ? P.f : P.resumeFile(sid), fs = D.files(sid); for (var i = 0; i < fs.length; i++) if (fs[i].id === fid) return { i: i, f: fs[i] }; return null; }
-  function srcLabel(sid) { var r = S.ser(sid) || {}; return r.src === 'lib' ? 'Library' : 'Shared'; }
+  function srcLabel(sid) { var r = S.ser(sid) || {}; return r.src === 'lib' ? 'Library' : r.src === 'local' ? 'On this phone' : 'Shared'; }
   function sub(sid, ctx) {
     var r = S.ser(sid) || {}, s = stats(sid), st = status(sid), L = lecNo(sid);
     if (!s.n && !D.folder(sid)) return tried[sid] ? 'Could not load — tap Refresh' : 'Loading…';
@@ -62,7 +62,7 @@
   }
   /* folders we know about but haven't listed on this device yet (e.g. synced from the other phone) */
   function need(sid) {
-    if (D.folder(sid) || tried[sid] || D.busy[sid]) return;
+    if (Local.isLocal(sid) || D.folder(sid) || tried[sid] || D.busy[sid]) return;
     var mode = P.mode(sid);
     if (mode === 't' && !Sync.token() && !C.apiKey) return;
     D.refreshFolder(sid, mode).then(function () { App.state(); }, function (e) { tried[sid] = e.status || 1; App.state(); });
@@ -100,7 +100,10 @@
   }
   function searchBox(tab, ph) { return '<div class="search">' + ic('srch') + '<input data-keep="q-' + tab + '" data-q="' + tab + '" placeholder="' + ph + '" value="' + E((U.q || {})[tab] || '') + '" autocomplete="off"></div>'; }
   function playIcon(sid) { return P.s === sid && P.playing() ? UI.PAUSE : UI.PLAY; }
-  function installBanner() { return bip && !standalone() ? '<div class="install" data-act="install">' + ic('dl') + '<span>Install the app for one-tap listening</span><span class="b">Install</span></div>' : ''; }
+  function installBanner() {
+    return (Local.root && !Local.ok() ? '<div class="install" data-act="reconnect">' + ic('folder') + '<span>Allow the phone folder “' + E(Local.name()) + '” again to use your saved lectures</span><span class="b">Allow</span></div>' : '') +
+      (bip && !standalone() ? '<div class="install" data-act="install">' + ic('dl') + '<span>Install the app for one-tap listening</span><span class="b">Install</span></div>' : '');
+  }
   function standalone() { return matchMedia('(display-mode: standalone)').matches || matchMedia('(display-mode: fullscreen)').matches; }
 
   /* ---------- tabs ---------- */
@@ -159,10 +162,12 @@
     return h;
   }
   function tabLib() {
-    var dk = desk(), h = '';
+    var dk = desk(), h = '', loc = all().filter(function (r) { return r.src === 'local' && !r.fin; }).sort(function (a, b) { return name(a.id).localeCompare(name(b.id)); });
+    var locH = loc.length ? '<div class="sec"><h3>On this phone</h3></div><div class="' + (dk ? 'dgrid' : 'grid') + '">' + loc.map(function (r) { return card(r.id); }).join('') + '</div>' : '';
     if (!dk) h += '<div class="hd"><div class="t"><h1>Library</h1></div>' + refBtn() + (wide() ? '<div class="ib" data-act="desk" title="Computer view">' + ic('mon') + '</div>' : '') + '<div class="ib" data-act="settings">' + ic('gear') + '</div></div>';
-    if (!S.d.acct) return h + '<div class="empty"><h3>Your lectures in Google Drive</h3><p>Sign in with Google and pick one folder in your Drive. Each folder inside it becomes a series here, with its audio files as lectures.</p><div class="btns"><div class="res" data-act="signIn">' + ic('user', 'i', 'stroke:var(--on)') + 'Sign in with Google</div></div></div>';
-    if (!S.d.lib || !S.d.lib.id) return h + '<div class="empty"><h3>Choose your Library folder</h3><p>Pick the Drive folder that holds your lecture folders (owned by you or shared with you).</p><div class="btns"><div class="res" data-act="pickLib">' + ic('folder', 'i', 'stroke:var(--on)') + 'Choose folder</div></div></div>';
+    if (Local.root && !Local.ok()) h += installBanner();
+    if (!S.d.acct) return h + locH + '<div class="empty"><h3>Your lectures in Google Drive</h3><p>Sign in with Google and pick one folder in your Drive. Each folder inside it becomes a series here, with its audio files as lectures.</p><div class="btns"><div class="res" data-act="signIn">' + ic('user', 'i', 'stroke:var(--on)') + 'Sign in with Google</div></div></div>';
+    if (!S.d.lib || !S.d.lib.id) return h + locH + '<div class="empty"><h3>Choose your Library folder</h3><p>Pick the Drive folder that holds your lecture folders (owned by you or shared with you).</p><div class="btns"><div class="res" data-act="pickLib">' + ic('folder', 'i', 'stroke:var(--on)') + 'Choose folder</div></div></div>';
     var list = libList(), ids = D.libIds();
     if (!dk) h += searchBox('lib', 'Search lectures');
     var opts = [['all', 'All ' + list.length], ['new', 'New ' + list.filter(function (r) { return status(r.id) === 'new'; }).length], ['go', 'Started ' + list.filter(function (r) { return status(r.id) === 'go'; }).length]];
@@ -170,42 +175,20 @@
     if (!ids.length) {
       h += '<div class="empty"><h3>' + (D.busy.lib ? 'Reading your folder…' : 'No series yet') + '</h3><p>' + (D.busy.lib ? 'One moment.' : Sync.token() ? 'Folders inside “' + E(S.d.lib.name) + '” appear here. Add some in Drive, then tap Refresh.' : 'Tap Refresh to read your folder from Google Drive.') + '</p>' +
         (D.busy.lib ? '' : '<div class="btns"><div class="res" data-act="refresh">' + ic('ref', 'i', 'stroke:var(--on)') + 'Refresh</div></div>') + '</div>';
-      return h;
+      return h + locH;
     }
     var show = filt('lib', list);
     h += '<div class="' + (dk ? 'dgrid' : 'grid') + '">' + show.map(function (r) { return card(r.id); }).join('') + '</div>';
     if (!show.length) h += '<p class="note">' + (list.length ? 'Nothing matches.' : 'Everything here is finished — see the Finished tab.') + '</p>';
-    return h;
+    return h + locH;
   }
 
   /* ---------- series screen ---------- */
   /* ---------- downloads ---------- */
   function box(on) { return '<div class="box' + (on ? ' on' : '') + '">' + (on ? '<svg viewBox="0 0 24 24"><path d="m6 12.5 4 4 8-9" stroke="var(--on)" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>' : '') + '</div>'; }
   function fileOf(sid, fid) { return D.files(sid).filter(function (f) { return f.id === fid; })[0] || null; }
-  /* a lecture's download state, for its line in the list: filled icon = Kept, outline = Auto */
-  function dlState(fid) {
-    if (P.cached[fid]) return P.kept(fid) ? '<span class="ofk" title="Kept">' + UI.DLK + '</span>kept' : '<span class="ofa" title="Auto">' + ic('dl') + '</span>offline';
-    var d = P.dl[fid]; if (!d) return '';
-    if (d.fail) return '<span class="ofe">!</span>download failed';
-    if (d.w) return '· ' + (d.w === 'wifi' ? 'waiting for Wi-Fi' : 'waiting for connection');
-    if (P.running && P.running.f === fid) return '<span class="ofl">↓</span>' + (d.tot ? Math.round(d.got / d.tot * 100) + '%' : 'starting');
-    return '· queued';
-  }
-  function mobNote() {
-    return !P.netKnown() ? 'This browser can’t tell Wi-Fi from mobile data, so downloads always run here. Streaming always works.'
-      : S.d.dl.mob ? 'On: downloads also run on mobile data' : 'Off: downloads wait for Wi-Fi. Streaming always works.';
-  }
-  function startDl(sid, ids) {
-    var need = 0; ids.forEach(function (id) { if (!P.cached[id]) need += P.size(sid, id); });
-    var go = function () {
-      var n = P.enqueue(sid, ids, true), w = P.blocked();
-      App.toast(!n ? 'Already on this device — kept' : w === 'wifi' ? 'Waiting for Wi-Fi — ' + n + ' queued' : w === 'off' ? 'Will download when you are back online' : 'Downloading ' + n + (n === 1 ? ' lecture' : ' lectures'));
-    };
-    P.free().then(function (sp) {
-      if (sp && need > sp.free) { PEND = go; openDlg(msgDlg('Not enough space', 'These lectures need ' + UI.mb(need) + ', but only ' + UI.mb(sp.free) + ' is free for the app on this device.', '<div class="res sec2" data-act="closeDlg">Cancel</div><div class="res" data-act="pendGo">Download anyway</div>')); }
-      else go();
-    });
-  }
+  /* a lecture's line in the list only says whether it is on this device */
+  function dlState(fid) { return P.cached[fid] ? ' <span class="ofk" title="On this device">' + UI.DLK + '</span>' : ''; }
   function sizeOf(ids) { var sz = {}, b = 0; P.saved().forEach(function (x) { sz[x.f.id] = x.f.sz || 0; }); ids.forEach(function (id) { b += sz[id] || 0; }); return b; }
   function confirmDel(title, b, extra, fn) {
     PEND = function () { fn().then(function () { DLS = null; DSEL = null; App.toast('Deleted · ' + UI.mb(b) + ' freed'); render(); }); };
@@ -215,17 +198,16 @@
     var all = P.saved(), groups = {}, order = [], tot = P.offBytes();
     all.forEach(function (x) { if (!groups[x.s]) { groups[x.s] = []; order.push(x.s); } groups[x.s].push(x.f); });
     if (!DLS) { DLS = { wait: 1 }; P.free().then(function (sp) { DLS = sp || { none: 1 }; schedule(); }); }
-    var h = '<div class="hd">' + (desk() ? '' : '<div class="ib" data-act="back">' + ic('back') + '</div>') + '<div class="t"><h1 style="font-size:24px">Downloads</h1></div>' + (all.length ? '<span class="btn2 gh" data-act="dselMode">' + (DSEL ? 'Cancel' : 'Select') + '</span>' : '') + '</div>';
+    var h = '<div class="hd">' + (desk() ? '' : '<div class="ib" data-act="back">' + ic('back') + '</div>') + '<div class="t"><h1 style="font-size:24px">All downloads</h1></div>' + (all.length ? '<span class="btn2 gh" data-act="dselMode">' + (DSEL ? 'Cancel' : 'Select') + '</span>' : '') + '</div>';
     h += '<div class="grp"><div class="it">' + ic('dl') + '<div class="tx">' + (tot ? UI.mb(tot) + ' of lectures on this device' : 'No lectures saved on this device') + '<small>' +
       (DLS.wait ? 'Checking space…' : DLS.none ? 'This browser doesn’t report free space' : 'App uses ' + UI.mb(DLS.used) + ' · ' + UI.mb(DLS.free) + ' free for it') + '</small></div></div></div>';
     if (P.q.length) {
       var qi = P.qInfo();
       h += '<div class="gt">DOWNLOADING</div><div class="grp">';
-      if (qi.w === 'wifi') h += '<div class="it"><div class="tx">Waiting for Wi-Fi — ' + qi.n + ' queued<small>Downloads are set not to use mobile data</small></div><span class="btn2" data-act="mobTg">Use mobile data</span></div>';
-      else if (qi.w === 'off') h += '<div class="it"><div class="tx">Waiting for connection — ' + qi.n + ' queued<small>They carry on by themselves when you’re back online</small></div></div>';
+      if (qi.w) h += '<div class="it"><div class="tx">' + wtxt(qi.w) + ' — ' + qi.n + ' queued<small>Each folder’s Wi-Fi / mobile data choice is on its Downloads page</small></div></div>';
       h += P.q.slice().sort(function (a, b) { return (P.running === b) - (P.running === a) || b.k - a.k; }).map(function (x) {
         var f = fileOf(x.s, x.f), d = P.dl[x.f] || {}, run = P.running === x, pc = d.tot ? Math.round(d.got / d.tot * 100) : 0;
-        var st = d.fail ? 'Failed' : run ? (d.tot ? pc + '% of ' + UI.mb(d.tot) : 'Starting…') : d.w ? 'Waiting' : d.next > Date.now() ? 'Retrying soon' : 'Queued' + (d.tot ? ' · ' + UI.mb(d.tot) : '');
+        var st = d.fail ? 'Failed' : run ? (d.tot ? pc + '% of ' + UI.mb(d.tot) : 'Starting…') : d.w ? wtxt(d.w) : d.next > Date.now() ? 'Trying again soon' : 'Queued' + (d.tot ? ' · ' + UI.mb(d.tot) : '');
         return '<div class="it">' + UI.cover(x.s, name(x.s), 34, null) + '<div class="tx">' + E(f ? UI.title(f.n) : 'Lecture') + '<small><span class="tag' + (x.k ? ' k' : '') + '">' + (x.k ? 'Kept' : 'Auto') + '</span>' + E(name(x.s)) + ' · ' + st + '</small>' +
           (run && d.tot ? '<div class="qbar"><b style="width:' + pc + '%"></b></div>' : '') + '</div>' +
           (d.fail ? '<span class="btn2" data-act="dlRetry" data-id="' + x.f + '">Retry</span>' : '') + '<div class="ib sm" data-act="dlCancel" data-id="' + x.f + '" title="Cancel">' + ic('x') + '</div></div>';
@@ -237,7 +219,8 @@
         var fs = groups[sid], b = 0, open = DEXP[sid] || !!DSEL, allOn = DSEL && fs.every(function (f) { return DSEL[f.id]; });
         fs.forEach(function (f) { b += f.sz || 0; });
         h += '<div class="grp dgp"><div class="it" data-act="' + (DSEL ? 'dselSer' : 'dexp') + '" data-id="' + sid + '">' + (DSEL ? box(allOn) : '') + UI.cover(sid, name(sid), 40, null) +
-          '<div class="tx">' + E(name(sid)) + '<small>' + fs.length + (fs.length === 1 ? ' lecture' : ' lectures') + ' · ' + UI.mb(b) + '</small></div>' +
+          '<div class="tx">' + E(name(sid)) + '<small>' + fs.length + (fs.length === 1 ? ' lecture' : ' lectures') + ' · ' + UI.mb(b) + (P.cfg(sid).full ? ' · whole folder' : '') + '</small></div>' +
+          (DSEL ? '' : '<span class="btn2 gh" data-act="fdl" data-id="' + sid + '">Settings</span>') +
           (DSEL ? '' : '<div class="ib sm" data-act="drmSer" data-id="' + sid + '" title="Delete series downloads">' + ic('trash') + '</div><span class="chev' + (open ? ' up' : '') + '">' + ic('down') + '</span>') + '</div>';
         if (open) h += fs.map(function (f) {
           var k = P.kept(f.id);
@@ -250,8 +233,77 @@
     }
     if (DSEL) { var n = Object.keys(DSEL).length; h += '<div class="selgo"><div class="res' + (n ? ' red' : ' sec2') + '" data-act="dselGo">' + (n ? 'Delete ' + n + ' (' + UI.mb(sizeOf(Object.keys(DSEL))) + ')' : 'Tick lectures to delete') + '</div></div>'; }
     else if (order.length || Object.keys(P.cached).length) h += '<div class="dbtns">' + (P.autoIds().length ? '<div class="res sec2" data-act="drmAuto">Delete all auto copies</div>' : '') + '<div class="res sec2 red2" data-act="drmAll">Delete everything</div></div>';
-    if (!order.length && !P.q.length) h += '<p class="note" style="margin-top:12px">To keep lectures on this device, open a series and tap the download button: whole series, or choose lectures. They stay until you delete them here.</p>';
+    if (!order.length && !P.q.length) h += '<p class="note" style="margin-top:12px">To keep lectures on this device, open a series and tap its Downloads button: keep nearby lectures, or download the whole folder.</p>';
     return h;
+  }
+
+  /* ---------- a series' Downloads page (the one place for download settings) ---------- */
+  function wtxt(w) { return { off: 'Waiting for connection', wifi: 'Waiting for Wi-Fi', mob: 'Waiting — Wi-Fi is switched off for this folder', none: 'Paused — tick Wi-Fi or Mobile data', auth: 'Waiting for Google sign-in — tap anywhere to continue', folder: 'Waiting for the phone folder' }[w] || ''; }
+  function folderRow(sid) {
+    if (!Local.supported()) return '<div class="it">' + ic('folder') + '<div class="tx">Saved inside the app<small>This browser can’t save into a phone folder (needs Chrome on Android or a computer)</small></div></div>';
+    if (!Local.root) return '<div class="it" data-act="pickFolder">' + ic('folder') + '<div class="tx">Saved inside the app<small>Choose a phone folder to keep lectures as files you can see and add to</small></div><span class="btn2">Choose</span></div>';
+    if (!Local.ok()) return '<div class="it" data-act="reconnect">' + ic('folder') + '<div class="tx">Phone folder “' + E(Local.name()) + '”<small>Chrome needs your OK to use it again</small></div><span class="btn2">Allow</span></div>';
+    return '<div class="it">' + ic('folder') + '<div class="tx">Saved in the phone folder<small>' + E(Local.name() + (sid ? ' / ' + Local.dirOf(sid) : '')) + '</small></div><span class="btn2 gh" data-act="pickFolder">Change</span></div>';
+  }
+  function qItem(x) {
+    var f = fileOf(x.s, x.f), d = P.dl[x.f] || {}, run = P.running === x, pc = d.tot ? Math.round(d.got / d.tot * 100) : 0;
+    var st = d.fail ? 'Failed' + (d.err ? ' (' + d.err + ')' : '') : run ? (d.tot ? pc + '% of ' + UI.mb(d.tot) : 'Starting…') : d.w ? wtxt(d.w) : d.next > Date.now() ? 'Trying again soon' + (d.err ? ' (' + d.err + ')' : '') : 'Queued' + (d.tot ? ' · ' + UI.mb(d.tot) : '');
+    return '<div class="it"><div class="tx">' + E(f ? UI.title(f.n) : 'Lecture') + '<small>' + E(st) + '</small>' + (run && d.tot ? '<div class="qbar"><b style="width:' + pc + '%"></b></div>' : '') + '</div>' +
+      (d.fail ? '<span class="btn2" data-act="dlRetry" data-id="' + x.f + '">Retry</span>' : '') + '</div>';
+  }
+  function viewFolderDl(v) {
+    var sid = v.id, c = P.cfg(sid), r = S.ser(sid) || {}, loc = Local.isLocal(sid), fs = D.files(sid);
+    var on = fs.filter(function (x) { return P.cached[x.id]; }), onB = 0, allB = 0, win = loc ? [] : P.window(sid), wb = 0;
+    on.forEach(function (x) { onB += x.sz || 0; }); fs.forEach(function (x) { allB += x.sz || 0; }); win.forEach(function (x) { wb += x.sz || 0; });
+    var h = '<div class="hd">' + (desk() ? '' : '<div class="ib" data-act="back">' + ic('back') + '</div>') + '<div class="t"><small>' + E(name(sid)) + '</small><h1 style="font-size:24px">Downloads</h1></div></div>';
+    h += '<div class="grp"><div class="it">' + ic('dl') + '<div class="tx">' + (loc ? fs.length + ' lectures on this phone' : on.length + ' of ' + fs.length + ' lectures on this device') + '<small>' + UI.mb(onB) + (loc ? '' : ' of ' + UI.mb(allB)) + '</small></div></div>' + folderRow(sid) + '</div>';
+    if (!loc) {
+      var left = 0; fs.forEach(function (x) { if (!P.cached[x.id]) left += x.sz || 0; });
+      h += '<div class="gt">KEEP ON THIS DEVICE</div><div class="grp">' +
+        '<div class="it" data-act="offTg" data-id="' + sid + '"><div class="tx">Keep nearby lectures offline<small>Current, 2 before, next 2 or 1 hour · ' + UI.mb(wb) + '</small></div><div class="tg' + (r.off ? ' on' : '') + '"></div></div>' +
+        '<div class="it" data-act="fullTg" data-id="' + sid + '"><div class="tx">Download whole folder<small>' + fs.length + ' lectures · ' + (left ? UI.mb(left) + ' to download' : 'all on this device') + ' · new lectures added in Drive download when the app opens</small></div><div class="tg' + (c.full ? ' on' : '') + '"></div></div></div>';
+    }
+    h += '<div class="gt">' + (loc ? 'UPLOAD USING' : 'DOWNLOAD USING') + '</div><div class="grp">' +
+      '<div class="it" data-act="netTg" data-k="wifi" data-id="' + sid + '">' + box(c.wifi) + '<div class="tx">Wi-Fi</div></div>' +
+      '<div class="it" data-act="netTg" data-k="mob" data-id="' + sid + '">' + box(c.mob) + '<div class="tx">Mobile data<small>' + (P.netKnown() ? 'Streaming the lecture you play always works' : 'This browser can’t tell Wi-Fi from mobile data, so these settings can’t be applied here') + '</small></div></div></div>';
+    var canUp = loc || ((r.src === 'lib') && Local.ok() && Local.hasDir(sid));
+    if (canUp) {
+      var u = Up.info(sid), ut = '';
+      if (u && Up.running === sid && u.n != null) ut = 'Uploading ' + Math.min(u.done + 1, u.n) + ' of ' + u.n + (u.tot ? ' · ' + Math.round(u.got / u.tot * 100) + '%' : '');
+      else if (u && u.w) ut = wtxt(u.w);
+      else if (u && u.err) ut = 'Trying again soon (' + u.err + ')';
+      else if (u) ut = 'Starting…';
+      var lib = S.d.lib && S.d.lib.id ? S.d.lib.name || 'Library' : null;
+      h += '<div class="gt">GOOGLE DRIVE</div><div class="grp"><div class="it" data-act="upTg" data-id="' + sid + '"><div class="tx">' + (loc ? 'Upload to Drive' : 'Upload files added on the phone') +
+        '<small>' + (ut ? E(ut) : loc ? (lib ? 'Copies this folder into “' + E(lib) + '” in Drive, so it plays on your other devices' : 'Sign in and choose your Library folder first') : 'New files you put in this phone folder go up to its Drive folder') + '</small>' +
+        (u && u.tot && Up.running === sid ? '<div class="qbar"><b style="width:' + Math.round(u.got / u.tot * 100) + '%"></b></div>' : '') + '</div><div class="tg' + (c.up ? ' on' : '') + '"></div></div></div>';
+    }
+    var mine = P.q.filter(function (x) { return x.s === sid; });
+    if (mine.length) {
+      mine.sort(function (a, b) { return (P.running === b) - (P.running === a) || b.k - a.k || a.at - b.at; });
+      h += '<div class="gt">DOWNLOADING · ' + mine.length + '</div><div class="grp">' + mine.slice(0, 30).map(qItem).join('') + (mine.length > 30 ? '<div class="it"><div class="tx"><small>…and ' + (mine.length - 30) + ' more</small></div></div>' : '') + '</div>';
+    }
+    h += '<div class="dbtns">' + (mine.length ? '<div class="res sec2" data-act="dlNow">' + ic('ref') + 'Try now</div>' : '') +
+      (loc ? '' : '<div class="res sec2" data-act="checkNew" data-id="' + sid + '">' + ic('drive') + 'Check Drive for new lectures</div>') +
+      (on.length && !loc ? '<div class="res sec2 red2" data-act="fdlDel" data-id="' + sid + '">Delete this folder’s downloads</div>' : '') + '</div>';
+    return h;
+  }
+  /* ask for the phone folder once (from a tap); without it, downloads go inside the app */
+  function needFolder(go) {
+    if (!Local.supported() || Local.ok()) return go();
+    (Local.root ? Local.reconnect() : Local.choose()).then(function () { P.scanCached().then(function () { Local.match(); go(); }); },
+      function () { App.toast('No phone folder — saving inside the app'); go(); });
+  }
+  function delPhone(sid) {
+    P.setCfg(sid, { full: 0, up: 0 }); if (!Local.isLocal(sid)) S.setSer(sid, { off: 0 });
+    var ids = D.files(sid).map(function (f) { return f.id; }).filter(function (id) { return P.cached[id] || P.inQ(id); });
+    return (Local.isLocal(sid) ? Promise.resolve() : P.remove(ids)).then(function () { return Local.hasDir(sid) ? Local.removeDir(sid) : null; }).then(function () { return Local.isLocal(sid) ? Local.scan() : null; });
+  }
+  function delDrive(sid) {
+    Sync.needWrite(function () {
+      D.trash(sid).then(function () { App.toast('Moved to Drive’s trash'); if (S.d.lib && S.d.lib.id) D.refreshLib().then(schedule, schedule); },
+        function (e) { App.toast('Could not delete in Drive: ' + (e.message || 'error')); });
+    });
   }
 
   function viewSeries(v) {
@@ -267,13 +319,11 @@
       h += '<div class="empty" style="margin:16px 0 0">' + (er ? '<h3>Could not open this folder</h3><p>' + (er === 404 || er === 403 ? 'It is not shared with “Anyone with the link”, or it was removed.' + (S.d.acct ? '' : ' If it is shared with your Google account, sign in.') : 'Check your connection and tap Refresh.') + '</p>' : '<h3>Loading lectures…</h3>') + '</div></div>';
       return h;
     }
-    var win = P.window(sid), wb = 0, qi = P.qInfo(sid), ob = P.offBytes(sid); win.forEach(function (x) { wb += x.sz; });
-    var sel = SEL && SEL.sid === sid ? SEL : null;
+    var loc = Local.isLocal(sid), dc = P.cfg(sid), dOn = dc.full || r.off || (loc && dc.up);
     h += UI.seg(s.fr) + '<div class="meta2"><span>' + s.eq.toFixed(1).replace('.0', '') + ' of ' + s.n + ' lectures · ' + s.pct + '%</span><span>' + (s.approx ? '~' : '') + UI.hrs(s.left) + ' left</span></div>' +
       '<div class="acts">' + (fs.length ? '<div class="res" data-act="resume" data-id="' + sid + '">' + (resumeTxt === 'Pause' ? UI.PAUSE : UI.PLAY) + resumeTxt + '</div>' : '<div class="res sec2">No audio files yet</div>') +
-      '<div class="cb" data-act="dlSheet" data-id="' + sid + '" title="Download">' + ic('dl') + '</div>' + '<div class="cb' + (r.star ? ' starred' : '') + '" data-act="star" data-id="' + sid + '" title="Star">' + ic('star') + '</div><div class="cb" data-act="share" data-id="' + sid + '" title="Share">' + ic('shr') + '</div></div>' +
-      '<div class="off"><div class="offt" data-act="dlMgr">' + ic('dl') + '<div>Keep nearby lectures offline<small>Current, 2 before, next 2 or 1 hour · ' + UI.mb(wb) +
-      (qi.w ? ' · ' + (qi.w === 'wifi' ? 'Waiting for Wi-Fi' : 'Waiting for connection') + ' — ' + qi.n + ' queued' : qi.n ? ' · downloading ' + qi.n + '…' : ob ? ' · ' + UI.mb(ob) + ' on this device' : '') + '</small></div></div><div class="tg' + (r.off ? ' on' : '') + '" data-act="offTg" data-id="' + sid + '"></div></div></div>';
+      '<div class="cb' + (dOn ? ' dlon' : '') + '" data-act="fdl" data-id="' + sid + '" title="Downloads">' + (dOn ? UI.DLK : ic('dl')) + '</div>' + '<div class="cb' + (r.star ? ' starred' : '') + '" data-act="star" data-id="' + sid + '" title="Star">' + ic('star') + '</div>' +
+      (loc ? '' : '<div class="cb" data-act="share" data-id="' + sid + '" title="Share">' + ic('shr') + '</div>') + '</div></div>';
     var early = [], late = [];
     fs.forEach(function (x, i) { (D.late(sid, x) ? late : early).push([x, i]); });
     var cur = P.s === sid ? P.f : (s.started ? P.resumeFile(sid) : null);
@@ -284,19 +334,12 @@
       var line = isCur && P.s === sid ? (P.playing() ? 'Playing' : 'Paused') + ' · ' + ap + UI.dur(left) + ' left' : (pr.p || 0) > 5 && !pr.done ? ap + UI.dur(left) + ' left' : ap + UI.dur(fd.d);
       var off = dlState(x.id);
       var isNew = D.late(sid, x) && !pr.p && !pr.done;
-      if (sel) num = box(sel.ids[x.id]);
-      return '<div class="fl' + (isCur ? ' cur' : '') + (dn ? ' dn' : '') + '" data-act="' + (sel ? 'selTg' : 'lec') + '" data-id="' + x.id + '"><div class="num">' + num + '</div><div class="tx"><h4>' + E(UI.title(x.n)) + (isNew ? ' <span class="new">NEW</span>' : '') + '</h4><p>' + line + off + '</p></div>' +
-        (sel ? '' : '<div class="mo" data-act="lecMenu" data-sid="' + sid + '" data-id="' + x.id + '" title="More">' + ic('more') + '</div>') + '</div>';
+      return '<div class="fl' + (isCur ? ' cur' : '') + (dn ? ' dn' : '') + '" data-act="lec" data-id="' + x.id + '"><div class="num">' + num + '</div><div class="tx"><h4>' + E(UI.title(x.n)) + (isNew ? ' <span class="new">NEW</span>' : '') + '</h4><p>' + line + (loc ? '' : off) + '</p></div></div>';
     };
-    if (sel) {
-      var sn = 0, sb = 0; Object.keys(sel.ids).forEach(function (id) { sn++; if (!P.cached[id]) sb += P.size(sid, id); });
-      h += '<div class="selbar"><b>' + (sn ? sn + ' selected' : 'Choose lectures') + '</b><span data-act="selAll">All</span><span data-act="selNone">None</span><span data-act="selCancel">Cancel</span></div>';
-    }
     h += early.map(lec).join('');
     if (late.length) h += '<div class="added">ADDED LATER</div>' + late.map(lec).join('');
-    if (!fs.length) h += '<p class="note">This folder has no audio files yet. Add them in Drive, then tap Refresh.</p>';
-    if (sel) h += '<div class="selgo"><div class="res' + (sn ? '' : ' sec2') + '" data-act="selGo">' + (sn ? 'Download ' + sn + (sb ? ' (' + UI.mb(sb) + ')' : '') : 'Tick the lectures to download') + '</div></div>';
-    else if (fs.length) h += '<span class="lnk" data-act="finTg" data-id="' + sid + '" style="text-align:center">' + (r.fin ? 'Mark as not finished' : 'Mark series as finished') + '</span>';
+    if (!fs.length) h += '<p class="note">This folder has no audio files yet. ' + (loc ? 'Add them to the folder on the phone' : 'Add them in Drive') + ', then tap Refresh.</p>';
+    if (fs.length) h += '<span class="lnk" data-act="finTg" data-id="' + sid + '" style="text-align:center">' + (r.fin ? 'Mark as not finished' : 'Mark series as finished') + '</span>';
     return h;
   }
 
@@ -342,10 +385,11 @@
     else h += '<div class="it">' + ic('user') + '<div>Google account<small>Optional. Adds your Library and keeps your place on every device.</small></div><span class="btn2" data-act="signIn">Sign in</span></div>';
     h += '<div class="it"' + (S.d.acct ? ' data-act="pickLib"' : '') + '>' + ic('drive') + '<div>Library folder<small>' + (S.d.lib && S.d.lib.id ? E(S.d.lib.name || '') : S.d.acct ? 'Not chosen yet' : 'Sign in to choose') + '</small></div>' + (S.d.acct ? '<span class="v">' + (S.d.lib && S.d.lib.id ? 'Change' : 'Choose') + '</span>' : '') + '</div>';
     h += '</div>';
-    var nOff = Object.keys(P.cached).length, qa = P.qInfo();
-    h += '<div class="gt">DOWNLOADS</div><div class="grp"><div class="it" data-act="mobTg"><div>Download using mobile data<small>' + mobNote() + '</small></div><div class="tg' + (S.d.dl.mob ? ' on' : '') + '" style="margin-left:auto"></div></div>' +
+    var nOff = P.saved().length, qa = P.qInfo();
+    h += '<div class="gt">DOWNLOADS</div><div class="grp">' + folderRow(null) +
       '<div class="it" data-act="dlMgr">' + ic('dl') + '<div>Manage downloads<small>' + (nOff ? nOff + (nOff === 1 ? ' lecture · ' : ' lectures · ') + UI.mb(P.offBytes()) + ' on this device' : 'Nothing saved on this device') +
-      (qa.n ? ' · ' + (qa.w === 'wifi' ? 'waiting for Wi-Fi — ' : '') + qa.n + ' queued' : '') + '</small></div><span class="v">Open</span></div></div>';
+      (qa.n ? ' · ' + qa.n + ' queued' : '') + '</small></div><span class="v">Open</span></div></div>' +
+      '<p class="note" style="margin:8px 22px 0">Wi-Fi / mobile data, nearby lectures and whole-folder downloads are set per series: open a series and tap its Downloads button.</p>';
     h += '<div class="gt">APP</div><div class="grp">' + (bip && !standalone() ? '<div class="it" data-act="install">' + ic('dl') + 'Install app<span class="btn2">Install</span></div>' : '') +
       '<div class="it" data-act="updateApp">' + ic('upd') + '<div>Update app<small>' + E(C.appVersion) + '</small></div><span class="v">Check</span></div>' +
       '<div class="it" data-act="shareApp">' + ic('shr') + 'Share app link</div></div>';
@@ -362,7 +406,7 @@
       h += [['root', 'My Drive', 'drive'], ['shared', 'Shared with me', 'sh'], ['drives', 'Shared drives', 'lib']].map(function (x) {
         return '<div class="pk" data-act="pickGo" data-id="' + x[0] + '" data-n="' + E(x[1]) + '">' + ic(x[2]) + '<div class="tx">' + x[1] + '</div>' + ic('fwd') + '</div>';
       }).join('');
-      h += '<p class="note" style="margin-top:12px">Pick the folder whose sub-folders are your lecture series. Read-only: the app never changes your Drive.</p>';
+      h += '<p class="note" style="margin-top:12px">Pick the folder whose sub-folders are your lecture series. The app only changes Drive when you upload a phone folder or delete a finished one.</p>';
       return h;
     }
     if (v.loading) h += '<p class="note">Loading…</p>';
@@ -378,7 +422,7 @@
   function renderDesk() {
     var t = top(), cnt = { listen: inProgress().length, star: starList().length, lib: libList().length, shared: sharedList().length, fin: finList().length };
     var recent = all().filter(function (r) { return r.last; }).sort(byLast).slice(0, 4);
-    var main = t && t.t === 'series' ? viewSeries(t) : t && t.t === 'settings' ? viewSettings() : t && t.t === 'downloads' ? viewDownloads() : t && t.t === 'picker' ? viewPicker(t) : U.tab === 'lib' ? tabLib() : U.tab === 'listen' ? tabListen() : tabList(U.tab);
+    var main = t && t.t === 'series' ? viewSeries(t) : t && t.t === 'settings' ? viewSettings() : t && t.t === 'downloads' ? viewDownloads() : t && t.t === 'fdl' ? viewFolderDl(t) : t && t.t === 'picker' ? viewPicker(t) : U.tab === 'lib' ? tabLib() : U.tab === 'listen' ? tabListen() : tabList(U.tab);
     var label = { listen: 'Listening', star: 'Starred', lib: 'Library', shared: 'Shared with me', fin: 'Finished' }[U.tab];
     var h = '<div class="dk' + (S.d.settings.tint === false ? ' notint' : '') + '" style="--h1:' + (P.s ? tint(P.s) + '88' : 'transparent') + '">';
     h += '<div class="side"><div class="logo"><i><svg viewBox="0 0 24 24">' + UI.I.head + '</svg></i>Lectures</div>' +
@@ -421,7 +465,7 @@
   function render() {
     rq = 0; SC = {};
     if (drag) return;
-    var tv = top(); if (SEL && !(tv && tv.t === 'series' && tv.id === SEL.sid)) SEL = null; if (DSEL && !(tv && tv.t === 'downloads')) DSEL = null;
+    var tv = top(); if (DSEL && !(tv && tv.t === 'downloads')) DSEL = null;
     document.documentElement.dataset.theme = S.d.settings.theme || 'midnight';
     var key = vkey(), sc = root.querySelector(desk() ? '.main' : '.scr'), keepY = null;
     if (sc && root.dataset.vk === key && root.dataset.sub === subKey()) keepY = sc.scrollTop;
@@ -430,7 +474,7 @@
     if (desk()) h = renderDesk();
     else if (t && t.t === 'player' && P.s) h = viewPlayer();
     else {
-      var body = !t ? (U.tab === 'listen' ? tabListen() : U.tab === 'lib' ? tabLib() : tabList(U.tab)) : t.t === 'series' ? viewSeries(t) : t.t === 'settings' ? viewSettings() : t.t === 'downloads' ? viewDownloads() : t.t === 'picker' ? viewPicker(t) : '';
+      var body = !t ? (U.tab === 'listen' ? tabListen() : U.tab === 'lib' ? tabLib() : tabList(U.tab)) : t.t === 'series' ? viewSeries(t) : t.t === 'settings' ? viewSettings() : t.t === 'downloads' ? viewDownloads() : t.t === 'fdl' ? viewFolderDl(t) : t.t === 'picker' ? viewPicker(t) : '';
       var tl = S.d.settings.tint === false ? ' notint' : '';
       h = '<div class="ph' + tl + '"' + (t && t.t === 'series' ? ' style="--h1:' + tint(t.id) + '88"' : '') + '><div class="scr' + (t ? ' nonav' : '') + '">' + body + '</div>' + (t && t.t === 'picker' ? '' : mini()) + (t ? '' : nav()) + '</div>';
     }
@@ -502,8 +546,66 @@
     finTg: function (el) { var id = el.dataset.id, r = S.ser(id) || {}; S.setSer(id, r.fin ? { fin: 0, finAt: 0 } : { fin: 1, finAt: Date.now() }); App.toast(r.fin ? 'Moved back to your lists' : 'Moved to Finished'); render(); },
     offTg: function (el) {
       var id = el.dataset.id, r = S.ser(id) || {}, on = !r.off;
-      var go = function () { S.setSer(id, { off: on ? 1 : 0 }); if (on) { App.toast('Saving nearby lectures for offline'); P.keepOffline(id); } else P.dropOffline(id); render(); };
-      if (on && P.mode(id) === 't' && !Sync.token()) Sync.need(go); else go();
+      var go = function () { S.setSer(id, { off: on ? 1 : 0 }); if (on) { App.toast('Keeping nearby lectures offline'); P.keepOffline(id); } else P.dropOffline(id); render(); };
+      if (on) needFolder(go); else go();
+    },
+    fdl: function (el) {
+      var id = el.dataset.id; if (top() && top().t === 'fdl' && top().id === id) return;
+      if (desk()) { V.push({ t: 'fdl', id: id }); saveView(); render(); var m = root.querySelector('.main'); if (m) m.scrollTop = 0; return; }
+      push({ t: 'fdl', id: id });
+    },
+    fullTg: function (el) {
+      var id = el.dataset.id;
+      if (P.cfg(id).full) {
+        P.setCfg(id, { full: 0 });
+        var drop = P.q.filter(function (x) { return x.s === id && x.k; }).map(function (x) { return x.f; });
+        drop.forEach(function (f) { delete S.d.dl.kept[f]; });
+        P.remove(drop).then(function () { App.toast('Whole-folder download off — downloaded lectures stay'); render(); });
+        return;
+      }
+      needFolder(function () {
+        P.setCfg(id, { full: 1 });
+        var n = P.fullSync(id), w = P.blockedFor(id);
+        App.toast(!n ? 'All lectures are on this device' : w ? wtxt(w) + ' — ' + n + ' queued' : 'Downloading ' + n + (n === 1 ? ' lecture' : ' lectures'));
+        P.kick(); render();
+      });
+    },
+    netTg: function (el) {
+      var id = el.dataset.id, k = el.dataset.k, p = {}; p[k] = P.cfg(id)[k] ? 0 : 1; P.setCfg(id, p);
+      P.kick(); Up.pump(); render();
+    },
+    upTg: function (el) {
+      var id = el.dataset.id;
+      if (P.cfg(id).up) { P.setCfg(id, { up: 0 }); Up.q = Up.q.filter(function (x) { return x !== id; }); delete Up.st[id]; App.toast('Upload off'); render(); return; }
+      if (!Local.ok()) return needFolder(render);
+      if (!S.d.acct) { App.toast('Sign in with Google first'); return Sync.signIn(false); }
+      if (!S.d.lib || !S.d.lib.id) { App.toast('Choose your Library folder first — uploads go there'); return A.pickLib(); }
+      Sync.needWrite(function () { P.setCfg(id, { up: 1 }); Up.start(id); App.toast('Uploading to Drive'); render(); });
+    },
+    pickFolder: function () {
+      if (!Local.supported()) return App.toast('This browser can’t use a phone folder');
+      Local.choose().then(function () { return P.scanCached(); }).then(function () { Local.match(); P.resumeQueue(); upAll(); App.toast('Phone folder: ' + Local.name()); render(); }, function () {});
+    },
+    reconnect: function () { Local.reconnect().then(function () { return P.scanCached(); }).then(function () { Local.match(); P.resumeQueue(); upAll(); render(); }, function () {}); },
+    dlNow: function () { P.kick(); Up.q.forEach(function (s) { if (Up.st[s]) Up.st[s].next = 0; }); Up.pump(); App.toast('Trying now'); },
+    checkNew: function (el) {
+      var id = el.dataset.id, mode = P.mode(id);
+      var go = function () {
+        App.toast('Checking Drive…');
+        D.refreshFolder(id, mode).then(function () { var n = P.qInfo(id).n; App.toast(P.cfg(id).full && n ? 'Up to date · ' + n + ' to download' : 'Up to date'); render(); }, function () { App.toast('Could not reach Drive'); });
+      };
+      if (mode === 't' && !Sync.token() && S.d.acct) Sync.need(go); else go();
+    },
+    fdlDel: function (el) {
+      var sid = el.dataset.id, ids = D.files(sid).map(function (f) { return f.id; }).filter(function (id) { return P.cached[id]; });
+      confirmDel('Delete ' + name(sid) + ' downloads?', sizeOf(ids), ' “Keep nearby” and “Download whole folder” are turned off for this series.', function () { P.setCfg(sid, { full: 0 }); S.setSer(sid, { off: 0 }); return P.remove(ids); });
+    },
+    finDel: function (el) {
+      var sid = el.dataset.id, w = el.dataset.w;
+      closeDlg(function () {
+        if (w === 'phone' || w === 'both') delPhone(sid).then(function () { App.toast('Deleted from this phone'); render(); });
+        if (w === 'drive' || w === 'both') delDrive(sid);
+      });
     },
     share: function (el) {
       var id = el.dataset.id, url = BASE + '#s=' + id, nm = name(id);
@@ -523,12 +625,13 @@
       var t = top();
       if (t && t.t === 'series') {
         var id = t.id; delete tried[id];
+        if (Local.isLocal(id)) { Local.scan().then(function () { App.toast('Up to date'); }); return; }
         var go = function () { D.refreshFolder(id, P.mode(id)).then(function () { App.toast('Up to date'); App.state(); }, function (e) { tried[id] = e.status || 1; App.toast('Could not refresh'); App.state(); }); App.state(); };
         if (P.mode(id) === 't' && !Sync.token() && S.d.acct) Sync.need(go); else go();
         return;
       }
-      tried = {};
-      var ids = (U.tab === 'shared' ? sharedList() : U.tab === 'star' ? starList() : U.tab === 'fin' ? finList() : U.tab === 'listen' ? inProgress() : []).filter(function (r) { return r.src !== 'lib'; });
+      tried = {}; if (Local.ok()) Local.scan();
+      var ids = (U.tab === 'shared' ? sharedList() : U.tab === 'star' ? starList() : U.tab === 'fin' ? finList() : U.tab === 'listen' ? inProgress() : []).filter(function (r) { return r.src === 'shared'; });
       ids.forEach(function (r) { D.refreshFolder(r.id, 'k').then(App.state, App.state); });
       if (S.d.acct && S.d.lib && S.d.lib.id) Sync.need(function () { D.refreshLib().then(App.state, function (e) { App.toast('Could not read the Library: ' + (e.message || '')); App.state(); }); App.state(); });
       App.state();
@@ -564,45 +667,8 @@
       if (desk()) { V.push({ t: 'downloads' }); saveView(); render(); var m = root.querySelector('.main'); if (m) m.scrollTop = 0; return; }
       push({ t: 'downloads' });
     },
-    mobTg: function () { S.d.dl.mob = S.d.dl.mob ? 0 : 1; S.persist(); App.toast(S.d.dl.mob ? 'Downloads will use mobile data too' : 'Downloads will wait for Wi-Fi'); P.pump(); render(); },
-    dlSheet: function (el) {
-      var sid = el.dataset.id, fs = D.files(sid), rest = fs.filter(function (f) { return !P.cached[f.id] || !P.kept(f.id); }), b = 0;
-      if (!fs.length) return App.toast('No lectures to download yet');
-      rest.forEach(function (f) { if (!P.cached[f.id]) b += f.sz || 0; });
-      openDlg('<h3>Download for offline</h3><p class="txt">Lectures you download here are <b>Kept</b>: they stay on this device until you delete them.' +
-        (P.blocked() === 'wifi' ? ' You’re on mobile data, so they’ll wait for Wi-Fi (change in Settings).' : '') + '</p>' +
-        '<div class="opt" data-act="dlAll" data-id="' + sid + '">' + ic('dl') + '<div class="tx">Whole series<small>' + (rest.length ? fs.length + ' lectures' + (b ? ' · ' + UI.mb(b) + ' to download' : ' · already on this device') : 'All ' + fs.length + ' lectures are kept on this device') + '</small></div></div>' +
-        '<div class="opt" data-act="dlChoose" data-id="' + sid + '">' + ic('sel') + '<div class="tx">Choose lectures<small>Tick the ones you want</small></div></div>' +
-        '<div class="two"><div class="res sec2" data-act="closeDlg">Cancel</div></div>');
-    },
-    dlAll: function (el) { var sid = el.dataset.id; closeDlg(function () { startDl(sid, D.files(sid).map(function (f) { return f.id; })); }); },
-    dlChoose: function (el) { var sid = el.dataset.id; closeDlg(function () { SEL = { sid: sid, ids: {} }; render(); }); },
-    selTg: function (el) { if (!SEL) return; var id = el.dataset.id; if (SEL.ids[id]) delete SEL.ids[id]; else SEL.ids[id] = 1; render(); },
-    selAll: function () { if (!SEL) return; D.files(SEL.sid).forEach(function (f) { SEL.ids[f.id] = 1; }); render(); },
-    selNone: function () { if (SEL) { SEL.ids = {}; render(); } },
-    selCancel: function () { SEL = null; render(); },
-    selGo: function () {
-      if (!SEL) return; var sid = SEL.sid, ids = D.files(sid).map(function (f) { return f.id; }).filter(function (id) { return SEL.ids[id]; });
-      if (!ids.length) return App.toast('Tick the lectures to download');
-      SEL = null; render(); startDl(sid, ids);
-    },
     pendGo: function () { var go = PEND; PEND = null; closeDlg(function () { if (go) go(); }); },
-    lecMenu: function (el) {
-      var sid = el.dataset.sid, id = el.dataset.id, f = fileOf(sid, id); if (!f) return;
-      var has = !!P.cached[id], k = P.kept(id), q = P.inQ(id);
-      var o = function (act, icon, txt, sm) { return '<div class="opt" data-act="' + act + '" data-sid="' + sid + '" data-id="' + id + '">' + icon + '<div class="tx">' + txt + (sm ? '<small>' + sm + '</small>' : '') + '</div></div>'; };
-      openDlg('<h3>' + E(UI.title(f.n)) + '</h3><p class="txt">' + E(name(sid)) + ' · ' + UI.mb(f.sz || 0) + (has ? (k ? ' · kept on this device' : ' · auto offline copy') : q ? ' · in the download queue' : '') + '</p>' +
-        o('lecPlay', ic('head'), 'Play') +
-        (has ? (k ? '' : o('lecDl', UI.DLK, 'Keep this download', 'So it isn’t cleared automatically')) + o('lecRm', ic('trash'), 'Remove download')
-          : q ? o('lecRm', ic('x'), 'Cancel download') : o('lecDl', ic('dl'), 'Download')) +
-        o('lecSel', ic('sel'), 'Select several') +
-        '<div class="two"><div class="res sec2" data-act="closeDlg">Close</div></div>');
-    },
-    lecPlay: function (el) { var sid = el.dataset.sid, id = el.dataset.id; closeDlg(function () { P.open(sid, id, true); }); },
-    lecDl: function (el) { var sid = el.dataset.sid, id = el.dataset.id; closeDlg(function () { startDl(sid, [id]); }); },
-    lecRm: function (el) { var id = el.dataset.id, was = !!P.cached[id]; closeDlg(function () { P.remove([id]).then(function () { App.toast(was ? 'Download removed' : 'Download cancelled'); }); }); },
-    lecSel: function (el) { var sid = el.dataset.sid, id = el.dataset.id; closeDlg(function () { SEL = { sid: sid, ids: {} }; SEL.ids[id] = 1; render(); }); },
-    dlRetry: function (el) { var d = P.dl[el.dataset.id]; if (d) { d.fail = 0; d.tries = 0; d.next = 0; } P.pump(); render(); },
+    dlRetry: function (el) { var d = P.dl[el.dataset.id]; if (d) { d.fail = 0; d.tries = 0; d.next = 0; d.w = null; } P.pump(); render(); },
     dlCancel: function (el) { P.remove([el.dataset.id]).then(function () { App.toast('Download cancelled'); }); },
     dexp: function (el) { var id = el.dataset.id; DEXP[id] = !DEXP[id]; render(); },
     dselMode: function () { DSEL = DSEL ? null : {}; render(); },
@@ -666,7 +732,6 @@
   }
 
   document.addEventListener('click', function (e) {
-    if (lpFired) { lpFired = false; e.preventDefault(); e.stopPropagation(); return; }
     var el = e.target.closest('[data-act]'); if (!el) return;
     var fn = A[el.dataset.act]; if (!fn) return;
     e.preventDefault(); e.stopPropagation();
@@ -682,16 +747,10 @@
     if (e.key === ' ' || e.code === 'Space') { e.preventDefault(); P.toggle(); }
     else if (e.key === 'ArrowLeft') { e.preventDefault(); P.skip(e.shiftKey ? -60 : -10); }
     else if (e.key === 'ArrowRight') { e.preventDefault(); P.skip(e.shiftKey ? 60 : 10); }
-    else if (e.key === 'Escape' && SEL && !dlgHtml) A.selCancel();
     else if (e.key === 'Escape' && (dlgHtml || V.length)) A.back();
   });
   /* scrub bar drag + hold-to-unlock */
   document.addEventListener('pointerdown', function (e) {
-    var lf = e.target.closest('.fl[data-act="lec"]'), tv = top();
-    if (lf && !SEL && tv && tv.t === 'series' && !e.target.closest('.mo')) {   // long-press a lecture → choose lectures to download
-      var sid0 = tv.id, id0 = lf.dataset.id;
-      lp = { x: e.clientX, y: e.clientY, t: setTimeout(function () { lp = null; lpFired = true; SEL = { sid: sid0, ids: {} }; SEL.ids[id0] = 1; vib(); render(); }, 550) };
-    }
     var tr = e.target.closest('[data-scrub]');
     if (tr && P.s && !(U.lock && !desk())) {
       drag = { el: tr, r: tr.getBoundingClientRect() }; tr.setPointerCapture(e.pointerId); moveDrag(e); e.preventDefault(); return;
@@ -704,12 +763,10 @@
     drag.el.querySelector('b').style.width = f * 100 + '%'; drag.el.querySelector('i').style.left = f * 100 + '%';
     var d = P.dur(), w = drag.el.closest('.scrub,.tl'); if (w && d) { var a = w.querySelector('.t-cur'), b = w.querySelector('.t-rem'); if (a) a.textContent = UI.hms(f * d); if (b) b.textContent = '−' + UI.hms(d - f * d); }
   }
-  document.addEventListener('pointermove', function (e) { if (drag) moveDrag(e); if (lp && Math.abs(e.clientX - lp.x) + Math.abs(e.clientY - lp.y) > 10) { clearTimeout(lp.t); lp = null; } });
-  function endLp() { if (lp) { clearTimeout(lp.t); lp = null; } }
-  document.addEventListener('contextmenu', function (e) { if (e.target.closest('.fl')) e.preventDefault(); });
+  document.addEventListener('pointermove', function (e) { if (drag) moveDrag(e); });
   function endDrag() { if (!drag) return; var f = drag.f, d = P.dur(); drag = null; if (d) P.seek(f * d); render(); }
-  document.addEventListener('pointerup', function () { endLp(); endDrag(); var h = document.querySelector('.hold'); if (h) h.classList.remove('hold'); clearTimeout(holdT); });
-  document.addEventListener('pointercancel', function () { endLp(); endDrag(); var h = document.querySelector('.hold'); if (h) h.classList.remove('hold'); clearTimeout(holdT); });
+  document.addEventListener('pointerup', function () { endDrag(); var h = document.querySelector('.hold'); if (h) h.classList.remove('hold'); clearTimeout(holdT); });
+  document.addEventListener('pointercancel', function () { endDrag(); var h = document.querySelector('.hold'); if (h) h.classList.remove('hold'); clearTimeout(holdT); });
 
   /* ---------- hooks used by Player / Sync ---------- */
   var toastT;
@@ -721,6 +778,20 @@
       if (!P.s && S.d.now && S.d.now.s) P.restore(S.d.now.s, S.d.now.f);
       schedule();
       if (S.d.lib && S.d.lib.id && !D.libIds().length && Sync.token()) D.refreshLib().then(schedule, schedule);
+    },
+    /* a series was just finished: offer to delete it from the phone, Drive or both (only if it is on the phone) */
+    finished: function (sid) {
+      var loc = Local.isLocal(sid), r = S.ser(sid) || {};
+      var onPhone = loc ? Local.ok() : D.files(sid).some(function (f) { return P.cached[f.id]; }) || P.q.some(function (x) { return x.s === sid; });
+      if (!onPhone) return;
+      var drive = !loc && r.src === 'lib' && !!S.d.acct;
+      var o = function (w, icon, txt, sm) { return '<div class="opt" data-act="finDel" data-w="' + w + '" data-id="' + sid + '">' + icon + '<div class="tx">' + txt + '<small>' + sm + '</small></div></div>'; };
+      setTimeout(function () {
+        openDlg('<h3>You finished ' + E(name(sid)) + '</h3><p class="txt">Delete its lectures to free space?</p>' +
+          o('phone', ic('trash'), 'Delete from this phone', loc ? 'Removes the folder and its files from the phone' : 'Removes the downloaded lectures; you can still stream them') +
+          (drive ? o('drive', ic('drive'), 'Delete from Google Drive', 'Moves the folder to Drive’s trash (restorable for 30 days)') + o('both', ic('trash'), 'Delete from both', 'Phone copies and the Drive folder') : '') +
+          '<div class="two"><div class="res sec2" data-act="closeDlg">Keep</div></div>');
+      }, 400);
     },
     lengthsChanged: function () { clearTimeout(this._lt); this._lt = setTimeout(schedule, 800); },
     viewSid: function () { var t = top(); return t && t.t === 'series' ? t.id : null; },
@@ -745,7 +816,20 @@
   if (fresh && U.view && U.view.length) U.view.forEach(function (v) { if (v.t === 'player' && !P.s) return; V.push(v); history.pushState({ v: V.length }, ''); });
   if (!fresh) { U.ty = {}; }
   render();
-  P.scanCached().then(function () { P.resumeQueue(); schedule(); });
+  /* downloads: what's saved (app storage + phone folder) → resume the queue; uploads; then ask Drive for new lectures */
+  function upAll() { Object.keys(S.d.dl.f).forEach(function (sid) { if (S.d.dl.f[sid].up && (Local.isLocal(sid) ? Local.hasDir(sid) : D.folder(sid))) Up.start(sid); }); }
+  function checkFull() {
+    lastCheck = Date.now();
+    var ids = Object.keys(S.d.dl.f).filter(function (sid) { return S.d.dl.f[sid].full && !Local.isLocal(sid) && S.ser(sid); });
+    ids.reduce(function (p, sid) {
+      return p.then(function () {
+        var m = P.mode(sid); if (m === 't' && !Sync.token()) return;   // Library listing needs sign-in; the cached list is queued meanwhile
+        return D.refreshFolder(sid, m).then(schedule, function () {});
+      });
+    }, Promise.resolve()).then(function () { P.kick(); });
+  }
+  P.scanCached().then(function () { return Local.init(); }).then(function () { Local.match(); P.resumeQueue(); upAll(); schedule(); setTimeout(checkFull, 2500); });
+  document.addEventListener('visibilitychange', function () { if (!document.hidden) { P.kick(); Up.pump(); if (Date.now() - lastCheck > 15 * 60000) checkFull(); } });
   function leaving() { rememberScroll(); U.left = Date.now(); saveView(); P.savePos(true); }
   document.addEventListener('visibilitychange', function () { if (document.hidden) { leaving(); if (window.Sync) Sync.schedule(100); } });
   window.addEventListener('pagehide', leaving);

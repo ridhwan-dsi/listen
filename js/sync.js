@@ -11,17 +11,21 @@
     set: function (st) { this.state = st; if (window.App) App.syncChanged(); },
     valid: function () { return !!this.tok && this.exp > Date.now() + 60000; },
     token: function () { return this.valid() ? this.tok : null; },
-    saveTok: function (acct) { try { localStorage.setItem(TK, JSON.stringify({ tok: this.tok, exp: this.exp, acct: acct })); } catch (e) {} },
+    saveTok: function (acct) { try { localStorage.setItem(TK, JSON.stringify({ tok: this.tok, exp: this.exp, acct: acct, scope: this.scope })); } catch (e) {} },
+    /* full Drive access granted (v3+): needed to upload and to trash a folder */
+    canWrite: function () { return /auth\/drive(\s|$)/.test(this.scope || ''); },
+    /* run cb(token) with write access, asking for it (from a tap) if this token is read-only */
+    needWrite: function (cb) { if (this.valid() && this.canWrite()) return cb(this.tok); this.waiters.push(cb); this.signIn(false); },
     dropTok: function () { this.tok = null; this.exp = 0; try { localStorage.removeItem(TK); } catch (e) {} },
     init: function () {
       var self = this;
       if (!this.enabled()) return;
-      try { var t = JSON.parse(localStorage.getItem(TK)); if (t && t.exp > Date.now() + 60000 && t.acct === S.d.acct) { this.tok = t.tok; this.exp = t.exp; } } catch (e) {}
+      try { var t = JSON.parse(localStorage.getItem(TK)); if (t && t.exp > Date.now() + 60000 && t.acct === S.d.acct) { this.tok = t.tok; this.exp = t.exp; this.scope = t.scope || ''; } } catch (e) {}
       var onTap = function () {
         setTimeout(function () {
           if (!S.d.acct || self.asking || navigator.onLine === false) return;
           var soon = !self.tok || self.exp < Date.now() + 10 * 60000;   // keep private playback alive: refresh on a tap near expiry
-          if (soon && (S.dirty || (window.Player && Player.needsToken()))) self.signIn(true);
+          if (soon && (S.dirty || (window.Player && Player.needsToken()) || (window.Up && Up.q.length))) self.signIn(true);
         }, 30);
       };
       document.addEventListener('pointerup', onTap, true);
@@ -49,7 +53,7 @@
     onToken: function (r) {
       var self = this;
       if (!r || r.error) { this.waiters = []; return this.set(S.d.acct ? 'paused' : 'off'); }
-      this.tok = r.access_token; this.exp = Date.now() + (r.expires_in || 3600) * 1000;
+      this.tok = r.access_token; this.exp = Date.now() + (r.expires_in || 3600) * 1000; this.scope = r.scope || '';
       this.set('syncing');
       fetch(API + '/oauth2/v3/userinfo', { headers: { Authorization: 'Bearer ' + this.tok } })
         .then(function (x) { return x.json(); })

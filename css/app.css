@@ -258,3 +258,7 @@ svg.i{width:20px;height:20px;stroke:var(--tx);fill:none;stroke-width:2;stroke-li
 .dk .dbtns{margin:18px 0 0;max-width:640px}.dk .selbar{margin:14px 0 4px}.dk .selgo{bottom:12px;padding:12px 0 4px;max-width:640px}
 .num .box svg,.box svg{position:static;width:18px;height:18px}
 .dbtns .res,.selgo .res{flex:none;width:100%}
+
+/* v3: series Downloads button lit when something is set to download; lecture line marker */
+.cb.dlon{color:var(--ac)}.cb.dlon svg{width:22px;height:22px}
+.fl .tx p .ofk{margin-left:6px;vertical-align:-1px}

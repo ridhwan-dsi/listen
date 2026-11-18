@@ -19,7 +19,7 @@
       return null;
     },
     img: function (sid) { var f = D.folder(sid); return f && f.img ? this.url(f.img, this.mode(sid)) : null; },
-    needsToken: function () { return !!this.s && this.mode() === 't' && !this.cached[this.f]; },
+    needsToken: function () { var self = this; return (!!this.s && this.mode() === 't' && !this.cached[this.f]) || Object.keys(this.dl).some(function (k) { return self.dl[k].w === 'auth'; }); },
     files: function () { return D.files(this.s); },
     idx: function () { var fs = this.files(), f = this.f; for (var i = 0; i < fs.length; i++) if (fs[i].id === f) return i; return -1; },
     file: function () { return this.files()[this.idx()] || null; },
@@ -62,6 +62,12 @@
       var self = this, fid = this.f, u = this.url(fid, this.mode());
       this.err = false; this.pend = at || 0;
       if (this.blobUrl) { URL.revokeObjectURL(this.blobUrl); this.blobUrl = null; }
+      if (this.cached[fid] === 'L' && window.Local) {   // saved in the phone folder: play the file itself
+        Local.file(fid).then(function (file) {
+          if (self.f !== fid) return; self.blobUrl = URL.createObjectURL(file); a.src = self.blobUrl; a.load(); if (self.wantPlay) a.play().catch(function () {});
+        }, function () { delete self.cached[fid]; if (self.f === fid) self.setSrc(at); });
+        return;
+      }
       if (u) { a.src = u; a.load(); return; }
       // signed in, no service worker yet (first visit): fetch the whole file with the token
       var t = window.Sync && Sync.token(); if (!t) { this.err = true; return; }
@@ -102,9 +108,9 @@
     checkFinished: function () {
       var fs = D.files(this.s); if (!fs.length) return;
       for (var i = 0; i < fs.length; i++) if (!(S.pr(fs[i].id) || {}).done) return;
-      var r = S.ser(this.s); if (r && !r.fin) { S.setSer(this.s, { fin: 1, finAt: Date.now() }); App.toast('Series finished — moved to Finished'); }
+      var r = S.ser(this.s); if (r && !r.fin) { S.setSer(this.s, { fin: 1, finAt: Date.now() }); App.toast('Series finished — moved to Finished'); App.finished(this.s); }
     },
-    tokenChanged: function () { if (this.s && this.err) { this.setSrc(this.cur()); if (this.wantPlay) a.play().catch(function () {}); } },
+    tokenChanged: function () { if (this.s && this.err) { this.setSrc(this.cur()); if (this.wantPlay) a.play().catch(function () {}); } this.kick(); if (window.Up) Up.pump(); },
 
     /* ---- lock screen / headset controls ---- */
     meta: function () {
@@ -136,34 +142,59 @@
     },
 
     /* ---- offline copies ----
-       One download queue, one file at a time. Kept = downloaded by hand, never removed automatically (Store.d.dl.kept).
-       Auto = the nearby-lectures window of a series with the switch on; cleared as the window moves on.
+       One download queue, one file at a time. Kept = whole-folder downloads (and older manual ones): never removed
+       automatically (Store.d.dl.kept). Auto = the nearby-lectures window of a series; cleared as the window moves on.
+       Where: the series' sub-folder of the phone folder when one is chosen (Local), otherwise inside the app ('alp-audio').
        Files come down in 8 MB pieces (HTTP Range) kept in cache 'alp-part', so a dropped connection or a closed app
-       resumes from the last piece; the pieces are then joined into the offline copy in 'alp-audio'.
+       resumes from the last piece; the pieces are then joined into the saved file, after checking the size.
        Never holds up listening: waits while the streamed lecture has under 45 s buffered.
-       Mobile data: off by default — on a cellular connection downloads wait for Wi-Fi (only where the browser says so). */
+       Network: per series (Store.d.dl.f[sid] = { wifi, mob, full, up }): Wi-Fi on, mobile data off by default.
+       Kept downloads never give up (retry every few minutes); a sign-in that ran out waits instead of failing. */
     q: [], running: null,
     kept: function (fid) { return !!S.d.dl.kept[fid]; },
-    cell: function () { var c = navigator.connection; return !!(c && c.type === 'cellular'); },
-    netKnown: function () { var c = navigator.connection; return !!(c && c.type); },
-    blocked: function () { return navigator.onLine === false ? 'off' : (!S.d.dl.mob && this.cell()) ? 'wifi' : null; },
+    cfg: function (sid) { var f = S.d.dl.f[sid] || {}; return { wifi: f.wifi == null ? 1 : f.wifi, mob: f.mob ? 1 : 0, full: f.full ? 1 : 0, up: f.up ? 1 : 0 }; },
+    setCfg: function (sid, patch) { var f = S.d.dl.f[sid] = S.d.dl.f[sid] || {}; Object.keys(patch).forEach(function (k) { f[k] = patch[k]; }); S.persist(); },
+    net: function () { var c = navigator.connection; return c && c.type && c.type !== 'unknown' ? c.type : null; },
+    netKnown: function () { return !!this.net(); },
+    /* why this series may not download right now: 'off' | 'wifi' (waiting for Wi-Fi) | 'mob' (Wi-Fi not allowed) | 'none' */
+    blockedFor: function (sid) {
+      if (navigator.onLine === false) return 'off';
+      var c = this.cfg(sid), t = this.net();
+      if (!c.wifi && !c.mob) return 'none';
+      if (t === 'cellular') return c.mob ? null : 'wifi';
+      if (t && !c.wifi) return 'mob';
+      return null;
+    },
     size: function (sid, fid) { var f = D.files(sid).filter(function (x) { return x.id === fid; })[0]; return (f && f.sz) || 0; },
     inQ: function (fid) { for (var i = 0; i < this.q.length; i++) if (this.q[i].f === fid) return this.q[i]; return null; },
     scanCached: function () {
       var self = this; if (!window.caches) return Promise.resolve();
       return caches.open(AC).then(function (c) { return c.keys(); }).then(function (ks) {
-        self.cached = {}; ks.forEach(function (r) { var m = r.url.match(/media\/([\w-]+)/); if (m) self.cached[m[1]] = 1; });
+        Object.keys(self.cached).forEach(function (k) { if (self.cached[k] === 1) delete self.cached[k]; });
+        ks.forEach(function (r) { var m = r.url.match(/media\/([\w-]+)/); if (m && !self.cached[m[1]]) self.cached[m[1]] = 1; });
       }).catch(function () {});
     },
-    /* after launch: finish kept downloads that were left half done, and refill the window of the series in the player */
+    /* on launch and when the app comes back: finish kept downloads, pick up new files in whole-folder series,
+       refill the nearby window, and retry everything that was waiting — straight away */
     resumeQueue: function () {
       var self = this, k = S.d.dl.kept, by = {};
       Object.keys(k).forEach(function (fid) { if (!self.cached[fid]) (by[k[fid].s] = by[k[fid].s] || []).push(fid); });
-      Object.keys(by).forEach(function (sid) { self.enqueue(sid, by[sid].sort(function (a, b) { return k[a].at - k[b].at; }), true, true); });
+      Object.keys(by).forEach(function (sid) { if (D.folder(sid)) self.enqueue(sid, by[sid].sort(function (a, b) { return k[a].at - k[b].at; }), true, true); });
+      Object.keys(S.d.dl.f).forEach(function (sid) { if (self.cfg(sid).full && D.folder(sid)) self.fullSync(sid); });
       if (this.s && (S.ser(this.s) || {}).off) this.keepOffline(this.s);
-      this.pump();
+      this.kick();
     },
-    /* manual download: kept=true. Already-saved auto copies just become Kept. Returns how many will download. */
+    /* retry now: clears waits and back-offs (kept downloads that had failed get another go) */
+    kick: function () { var self = this; Object.keys(this.dl).forEach(function (k) { var d = self.dl[k]; d.next = 0; if (d.w === 'auth' && window.Sync && Sync.token()) d.w = null; if (d.fail && (self.inQ(k) || {}).k) { d.fail = 0; d.tries = 0; } }); this.pump(); App.state(); },
+    /* whole-folder: queue every lecture not on the device yet (also files added to the Drive folder later) */
+    fullSync: function (sid) {
+      var self = this; if (!this.cfg(sid).full || Local.isLocal(sid)) return 0;
+      var ids = D.files(sid).filter(function (f) { return !self.cached[f.id]; }).map(function (f) { return f.id; });
+      D.files(sid).forEach(function (f) { if (self.cached[f.id] && !S.d.dl.kept[f.id]) S.d.dl.kept[f.id] = { s: sid, at: Date.now() }; });
+      if (ids.length) this.enqueue(sid, ids, true, true);
+      S.persist(); return ids.length;
+    },
+    /* kept=true: never cleared automatically. Already-saved auto copies just become Kept. Returns how many will download. */
     enqueue: function (sid, fids, kept, quiet) {
       var self = this, n = 0, now = Date.now();
       fids.forEach(function (fid, i) {
@@ -180,37 +211,45 @@
     },
     pick: function () {
       var now = Date.now(), self = this, fs = this.s ? this.files() : [], i = this.idx(), nx = i >= 0 && fs[i + 1] ? fs[i + 1].id : null;
-      var ok = this.q.filter(function (x) { var d = self.dl[x.f]; return d && !d.fail && !(d.next > now); });
+      var ok = this.q.filter(function (x) { var d = self.dl[x.f]; return d && !d.fail && !d.w && !(d.next > now); });
       ok.sort(function (a, b) { return (b.f === nx) - (a.f === nx) || b.k - a.k || (a.k ? a.at - b.at : a.o - b.o); });
       return ok[0] || null;
     },
     pump: function () {
       var self = this; clearTimeout(this.pumpT);
       if (this.running || !this.q.length || !window.caches) return;
-      var why = this.blocked();
-      this.q.forEach(function (x) { if (self.dl[x.f]) self.dl[x.f].w = why; });
-      if (why) { App.state(); return; }
+      var tok = !!(window.Sync && Sync.token());
+      this.q.forEach(function (x) { var d = self.dl[x.f]; if (!d) return; var b = self.blockedFor(x.s); d.w = b || (d.w === 'auth' && !tok ? 'auth' : null); });
       var job = this.pick();
       if (!job) {   // all waiting to retry: come back at the earliest
-        var t = Math.min.apply(null, this.q.map(function (x) { var d = self.dl[x.f]; return d && !d.fail && d.next ? d.next : Infinity; }));
+        var t = Math.min.apply(null, this.q.map(function (x) { var d = self.dl[x.f]; return d && !d.fail && !d.w && d.next ? d.next : Infinity; }));
         if (isFinite(t)) this.pumpT = setTimeout(function () { self.pump(); }, Math.max(500, t - Date.now()));
-        return;
+        App.state(); return;
       }
       this.running = job; App.state();
       this.fetchFile(job).then(function () {
-        self.cached[job.f] = 1; self.q = self.q.filter(function (x) { return x !== job; }); delete self.dl[job.f];
+        self.q = self.q.filter(function (x) { return x !== job; }); delete self.dl[job.f];
       }, function (e) {
         var d = self.dl[job.f];
         if (e === 'cancel' || !d) { self.dropParts(job.f); return; }
-        if (e === 'wait') return;   // offline / mobile data: the pieces stay, it resumes from there
-        d.tries = (d.tries || 0) + 1; console.warn('download failed', job.f, e);
-        if (d.tries >= 5) d.fail = 1; else d.next = Date.now() + [5, 15, 45, 120][d.tries - 1] * 1000;
+        if (e === 'wait') return;   // offline / network not allowed: the pieces stay, it resumes from there
+        if (e === 'auth') { d.w = 'auth'; return; }   // sign-in ran out: waits for the next tap / sign-in
+        d.tries = (d.tries || 0) + 1; d.err = (e && e.message) || String(e); console.warn('download failed', job.f, e);
+        if (!job.k && d.tries >= 5) d.fail = 1;
+        else d.next = Date.now() + [5, 15, 45, 120, 300][Math.min(d.tries, 5) - 1] * 1000;
       }).then(function () { self.running = null; App.state(); self.pumpT = setTimeout(function () { self.pump(); }, 300); });
     },
+    /* one piece. Token first (works for Library and shared files alike), API key for public files.
+       Rejects 'auth' when neither works because the sign-in ran out. */
     get: function (fid, mode, from, to) {
       var t = window.Sync && Sync.token(), u = D.mediaUrl(fid), h = { Range: 'bytes=' + from + '-' + to };
-      if (mode === 't' && t) h.Authorization = 'Bearer ' + t; else if (C.apiKey) u += '&key=' + C.apiKey; else return Promise.reject(new Error('no key'));
-      return fetch(u, { headers: h });
+      var key = function () { return C.apiKey ? fetch(u + '&key=' + C.apiKey, { headers: h, referrerPolicy: 'no-referrer-when-downgrade' }) : Promise.resolve(null); };
+      var noAuth = function (r) { if (S.d.acct && (!t || (r && r.status === 401)) && (!r || r.status === 401 || r.status === 403 || r.status === 404)) throw 'auth'; return r || Promise.reject(new Error('no key')); };
+      if (t) return fetch(u, { headers: Object.assign({ Authorization: 'Bearer ' + t }, h) }).then(function (r) {
+        if (r.ok) return r;
+        return key().then(function (r2) { if (r2 && r2.ok) return r2; if (r.status === 401) { if (window.Sync) Sync.dropTok(); throw 'auth'; } return r; });
+      });
+      return key().then(function (r) { return r && r.ok ? r : noAuth(r); });
     },
     /* wait while the lecture being streamed has under 45 s buffered ahead */
     calm: function () {
@@ -225,24 +264,39 @@
         })();
       });
     },
+    /* the finished file: into the phone folder (series sub-folder) if chosen, else inside the app */
+    save: function (job, parts, type) {
+      var self = this, fid = job.f, f = Local.find(fid);
+      var toCache = function () {
+        var b = new Blob(parts, { type: type });
+        return caches.open(AC).then(function (c) { return c.put(BASE + 'media/' + fid, new Response(b, { headers: { 'Content-Type': type, 'Content-Length': String(b.size) } })); })
+          .then(function () { self.cached[fid] = 1; });
+      };
+      if (!(Local.ok() && f)) return toCache();
+      return Local.write(job.s, f.f, parts).then(function () {
+        self.cached[fid] = 'L'; if (!job.k) S.d.dl.mine[fid] = 1; S.persist();
+        caches.open(AC).then(function (c) { c.delete(BASE + 'media/' + fid); }).catch(function () {});
+      }, function (e) { console.warn('phone folder write failed, saved in the app instead', e); return toCache(); });
+    },
     fetchFile: function (job) {
       var self = this, fid = job.f, d = this.dl[fid], mode = this.mode(job.s), PB = BASE + 'part/' + fid + '/', CH = this.CH;
-      var live = function () { if (!self.inQ(fid) || self.dl[fid] !== d) throw 'cancel'; if (self.blocked()) throw 'wait'; };
+      var live = function () { if (!self.inQ(fid) || self.dl[fid] !== d) throw 'cancel'; if (self.blockedFor(job.s)) throw 'wait'; };
       return caches.open(PART).then(function (pc) {
         return pc.keys().then(function (ks) {
           var have = {}, n = 0, tot = d.tot || 0;
           ks.forEach(function (r) { if (r.url.indexOf(PB) === 0) have[+r.url.slice(PB.length)] = 1; });
+          var drop = function (urls) { urls.forEach(function (u) { pc.delete(u); }); };
           var finish = function () {
             var urls = []; for (var i = 0; i * CH < tot; i++) urls.push(PB + i);
             return Promise.all(urls.map(function (u) { return pc.match(u); })).then(function (rs) {
-              if (rs.some(function (r) { return !r; })) { urls.forEach(function (u) { pc.delete(u); }); throw new Error('missing piece'); }
+              if (rs.some(function (r) { return !r; })) { drop(urls); throw new Error('missing piece'); }
               return Promise.all(rs.map(function (r) { return r.blob(); }));
             }).then(function (bs) {
-              var b = new Blob(bs, { type: d.type || 'audio/mpeg' });
-              if (b.size !== tot) { urls.forEach(function (u) { pc.delete(u); }); throw new Error('size ' + b.size + ' ≠ ' + tot); }
+              var sz = 0; bs.forEach(function (b) { sz += b.size; });
+              if (sz !== tot) { drop(urls); throw new Error('size ' + sz + ' ≠ ' + tot); }   // never save a cut-short file
               live();
-              return caches.open(AC).then(function (c) { return c.put(BASE + 'media/' + fid, new Response(b, { headers: { 'Content-Type': b.type, 'Content-Length': String(b.size) } })); });
-            }).then(function () { return Promise.all(urls.map(function (u) { return pc.delete(u); })); });
+              return self.save(job, bs, d.type || 'audio/mpeg');
+            }).then(function () { drop(urls); });
           };
           var step = function () {
             live();
@@ -250,18 +304,21 @@
             if (tot && have[n]) { n++; d.got = Math.min(tot, n * CH); return step(); }
             return self.calm().then(function () {
               live();
-              return self.get(fid, mode, n * CH, n * CH + CH - 1).catch(function () { throw navigator.onLine === false ? 'wait' : new Error('network'); });
+              return self.get(fid, mode, n * CH, n * CH + CH - 1).catch(function (e) { if (e === 'auth') throw e; throw navigator.onLine === false ? 'wait' : new Error('network'); });
             }).then(function (r) {
               if (r.status === 416 && tot) return finish();
               if (!r.ok) throw new Error('HTTP ' + r.status);
-              var m = /\/(\d+)\s*$/.exec(r.headers.get('Content-Range') || '');
               d.type = (r.headers.get('Content-Type') || d.type || 'audio/mpeg').split(';')[0];
-              if (r.status === 200 || !m) {   // the server sent the whole file in one go
-                return r.blob().then(function (b) { live(); return caches.open(AC).then(function (c) { return c.put(BASE + 'media/' + fid, new Response(b, { headers: { 'Content-Type': d.type, 'Content-Length': String(b.size) } })); }); });
-              }
-              tot = d.tot = +m[1];
+              var m = /\/(\d+)\s*$/.exec(r.headers.get('Content-Range') || '');
               return r.blob().then(function (b) {
                 live();
+                if (r.status === 200) {   // the server sent the whole file in one go
+                  if (tot && b.size !== tot) throw new Error('got ' + b.size + ' of ' + tot + ' bytes');
+                  return self.save(job, [b], d.type).then(function () { drop(Object.keys(have).map(function (k) { return PB + k; })); });
+                }
+                if (m) tot = d.tot = +m[1];
+                else if (!tot) { if (b.size < CH) tot = d.tot = n * CH + b.size; else throw new Error('size unknown'); }   // header hidden: use the size Drive listed
+                if (b.size !== Math.min(CH, tot - n * CH)) throw new Error('short piece ' + b.size);
                 return pc.put(PB + n, new Response(b, { headers: { 'Content-Type': d.type } })).then(function () {
                   have[n] = 1; n++; d.got = Math.min(tot, n * CH); d.tries = 0; App.state(); return step();
                 });
@@ -286,8 +343,11 @@
       while (end + 1 < fs.length && (end - i < 2 || sec < 3600) && end - i < 30) { end++; sec += len(fs[end]) || fs[end].sz / bps; }
       return fs.slice(Math.max(0, i - 2), end + 1);
     },
+    /* an auto copy the app may clear: in the app's storage, or a file the app itself put in the phone folder */
+    isAuto: function (fid) { return !!this.cached[fid] && !this.kept(fid) && (this.cached[fid] === 1 || !!S.d.dl.mine[fid]); },
     /* auto window: queue upcoming first, then the current lecture, then the earlier ones; clear auto copies outside it */
     keepOffline: function (sid) {
+      if (Local.isLocal(sid)) return Promise.resolve();
       var self = this, want = this.window(sid), keep = {}, fs = D.files(sid), fid = (this.s === sid && this.f) || this.resumeFile(sid), ci = 0;
       want.forEach(function (f, k) { keep[f.id] = 1; if (f.id === fid) ci = k; });
       if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(function () {});
@@ -298,34 +358,39 @@
         if (q) { if (!q.k) q.o = k; }
         else if (!self.cached[f.id]) { self.q.push({ f: f.id, s: sid, k: 0, o: k, at: Date.now() }); self.dl[f.id] = { got: 0, tot: f.sz || 0, tries: 0 }; }
       });
-      return caches.open(AC).then(function (c) {
-        return Promise.all(fs.map(function (f) { if (self.cached[f.id] && !keep[f.id] && !self.kept(f.id) && f.id !== self.f) { delete self.cached[f.id]; return c.delete(BASE + 'media/' + f.id); } }));
-      }).then(function () { self.pump(); App.state(); });
+      var old = fs.filter(function (f) { return self.isAuto(f.id) && !keep[f.id] && f.id !== self.f; }).map(function (f) { return f.id; });
+      return (old.length ? this.remove(old, true) : Promise.resolve()).then(function () { self.pump(); App.state(); });
     },
     /* switch off: auto copies and queued auto downloads of that series go; Kept stay */
     dropOffline: function (sid) {
       var self = this, ids = D.files(sid).filter(function (f) { return !self.kept(f.id); }).map(function (f) { return f.id; });
-      return this.remove(ids.filter(function (id) { return self.cached[id] || self.inQ(id); }));
+      return this.remove(ids.filter(function (id) { return self.isAuto(id) || (self.inQ(id) && !self.cached[id]); }));
     },
-    /* delete offline copies (and cancel their downloads); the lecture playing carries on by streaming */
-    remove: function (fids) {
-      var self = this, gone = {};
-      fids.forEach(function (id) { gone[id] = 1; delete S.d.dl.kept[id]; delete self.dl[id]; delete self.cached[id]; self.dropParts(id); });
+    /* delete saved copies (and cancel their downloads); the lecture playing carries on by streaming */
+    remove: function (fids, quiet) {
+      var self = this, gone = {}, local = [];
+      fids.forEach(function (id) {
+        if (self.cached[id] === 'L') { var x = Local.find(id); if (x) local.push(x); }
+        gone[id] = 1; delete S.d.dl.kept[id]; delete S.d.dl.mine[id]; delete self.dl[id]; delete self.cached[id]; self.dropParts(id);
+      });
       this.q = this.q.filter(function (x) { return !gone[x.f]; });
       S.persist();
-      if (!window.caches) return Promise.resolve();
-      return caches.open(AC).then(function (c) { return Promise.all(fids.map(function (id) { return c.delete(BASE + 'media/' + id); })); })
-        .then(function () { App.state(); self.pump(); });
+      var p1 = Promise.all(local.map(function (x) { return Local.removeFile(x.s, x.f); }));
+      var p2 = window.caches ? caches.open(AC).then(function (c) { return Promise.all(fids.map(function (id) { return c.delete(BASE + 'media/' + id); })); }) : Promise.resolve();
+      return Promise.all([p1, p2]).then(function () { if (!quiet) { App.state(); self.pump(); } });
     },
-    autoIds: function () { var self = this; return Object.keys(this.cached).filter(function (id) { return !self.kept(id); }); },
+    autoIds: function () { var self = this; return Object.keys(this.cached).filter(function (id) { return self.isAuto(id); }); },
+    /* everything the app downloaded (phone-folder files of "On this phone" series are the user's own and stay) */
     dropAll: function () {
-      var self = this; S.d.dl.kept = {}; S.persist(); this.q = []; this.dl = {}; this.cached = {};
-      return Promise.all([caches.delete(AC), caches.delete(PART)]).then(function () { App.state(); });
+      var self = this, ids = Object.keys(this.cached).filter(function (id) { return !Local.isLocal(id); });
+      Object.keys(S.d.dl.f).forEach(function (sid) { if (S.d.dl.f[sid].full) S.d.dl.f[sid].full = 0; });
+      this.q = []; this.dl = {};
+      return this.remove(ids).then(function () { S.d.dl.kept = {}; S.persist(); return Promise.all([caches.delete(AC), caches.delete(PART)]); }).then(function () { App.state(); });
     },
-    /* every lecture we know of with an offline copy: [{f: file, s: seriesId}] */
+    /* every lecture we know of with a saved copy: [{f: file, s: seriesId}] */
     saved: function () {
       var self = this, out = [], seen = {};
-      Object.keys(D.c.f).forEach(function (sid) { D.files(sid).forEach(function (f) { if (self.cached[f.id] && !seen[f.id]) { seen[f.id] = 1; out.push({ f: f, s: sid }); } }); });
+      Object.keys(D.c.f).forEach(function (sid) { if (Local.isLocal(sid)) return; D.files(sid).forEach(function (f) { if (self.cached[f.id] && !seen[f.id]) { seen[f.id] = 1; out.push({ f: f, s: sid }); } }); });
       return out;
     },
     offBytes: function (sid, which) {
@@ -333,7 +398,7 @@
       this.saved().forEach(function (x) { if ((!sid || x.s === sid) && (!which || (which === 'k') === self.kept(x.f.id))) b += x.f.sz || 0; });
       return b;
     },
-    /* what the series screen says about its downloads */
+    /* what a series' download line says */
     qInfo: function (sid) {
       var self = this, list = this.q.filter(function (x) { return !sid || x.s === sid; });
       var w = list.length && list.every(function (x) { var d = self.dl[x.f]; return d && d.w; }) ? (self.dl[list[0].f] || {}).w : null;
@@ -348,7 +413,7 @@
     probe: function (sid) {
       var self = this; if (this.probing === sid) return; this.probing = sid;
       var pa = this.pa || (this.pa = new Audio()); pa.preload = 'metadata'; pa.muted = true;
-      var list = D.files(sid).filter(function (f) { return !D.dur(f.id) && !((S.pr(f.id) || {}).d); }).slice(0, 80), i = 0;
+      var list = Local.isLocal(sid) ? [] : D.files(sid).filter(function (f) { return !D.dur(f.id) && !((S.pr(f.id) || {}).d); }).slice(0, 80), i = 0;
       var next = function () {
         if (i >= list.length || App.viewSid() !== sid || navigator.onLine === false) { self.probing = null; pa.removeAttribute('src'); return; }
         var f = list[i++], u = self.url(f.id, self.mode(sid)), done = false;
@@ -394,11 +459,10 @@
   a.addEventListener('playing', function () { clearTimeout(stallT); });
   window.addEventListener('online', function () {
     revive();
-    Object.keys(P.dl).forEach(function (k) { P.dl[k].next = 0; });
-    P.pump();
+    P.kick(); if (window.Up) Up.pump();
   });
   window.addEventListener('offline', function () { App.state(); });
-  if (navigator.connection && navigator.connection.addEventListener) navigator.connection.addEventListener('change', function () { P.pump(); App.state(); });
+  if (navigator.connection && navigator.connection.addEventListener) navigator.connection.addEventListener('change', function () { P.kick(); if (window.Up) Up.pump(); });
   if ('mediaSession' in navigator) {
     var h = function (n, fn) { try { navigator.mediaSession.setActionHandler(n, fn); } catch (e) {} };
     h('play', function () { P.play(); }); h('pause', function () { P.pause(); });

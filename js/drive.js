@@ -17,7 +17,7 @@
       return fetch(url, { headers: { Authorization: 'Bearer ' + t } }).then(ok);
     }
     if (!C.apiKey) return Promise.reject(err(0, 'nokey'));
-    return fetch(url + sep + 'key=' + C.apiKey).then(ok);
+    return fetch(url + sep + 'key=' + C.apiKey, { referrerPolicy: 'no-referrer-when-downgrade' }).then(ok);
   }
   function ok(r) {
     if (r.ok) return r.json();
@@ -98,7 +98,7 @@
       if (this.busy[id]) return this.busy[id];
       var p = this.meta(id, pref).then(function (m) {
         if (m.shortcutDetails && m.shortcutDetails.targetId) { id = m.shortcutDetails.targetId; }
-        return self.listIn([id], pref).then(function (kids) { var e = self.store(id, m.name, kids); self.persist(); return e; });
+        return self.listIn([id], pref).then(function (kids) { var e = self.store(id, m.name, kids); self.persist(); self.listed([id]); return e; });
       });
       this.busy[id] = p;
       p.then(function () { delete self.busy[id]; }, function () { delete self.busy[id]; });
@@ -124,13 +124,24 @@
             if (!r) S.setSer(f.id, { name: f.name, src: 'lib', seen: Date.now() }, true);
             else if (r.name !== f.name || (r.src !== 'lib' && r.src !== 'shared')) S.setSer(f.id, { name: f.name, src: r.src || 'lib' }, true);
           });
-          self.c.lib = { id: lib.id, kids: ids, at: Date.now() }; self.persist(); S.save();
+          self.c.lib = { id: lib.id, kids: ids, at: Date.now() }; self.persist(); S.save(); self.listed(ids);
           return ids;
         });
       });
       this.busy.lib = p;
       p.then(function () { delete self.busy.lib; }, function () { delete self.busy.lib; });
       return p;
+    },
+    /* after a listing: match phone-folder files, queue new files of whole-folder series */
+    listed: function (ids) {
+      if (window.Local) { Local.adopt(); Local.match(); }
+      var P = window.Player; if (!P) return;
+      var n = 0; ids.forEach(function (id) { n += P.fullSync(id); }); if (n) P.pump();
+    },
+    /* move a folder to Drive's trash (restorable for 30 days) */
+    trash: function (id) {
+      var t = window.Sync && Sync.token(); if (!t) return Promise.reject(err(0, 'notoken'));
+      return fetch(API + '/files/' + id + '?supportsAllDrives=true', { method: 'PATCH', headers: { Authorization: 'Bearer ' + t, 'Content-Type': 'application/json' }, body: JSON.stringify({ trashed: true }) }).then(ok);
     },
     libIds: function () { var l = this.c.lib, S = window.Store; return (l && S.d.lib && l.id === S.d.lib.id) ? l.kids : []; },
 

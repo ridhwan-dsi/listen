@@ -5,10 +5,14 @@
    lib         = { id, name, u }  — the Library parent folder (signed in only)
    now         = { s, f, u }      — the lecture loaded in the player
    Local only: ui (tab, view, scroll), cache (folder listings — see drive.js),
-   dl = { mob: allow mobile data 0|1, kept: { fileId: { s: seriesId, at } } } — downloads belong to this device. */
+   dl = { kept: { fileId: { s: seriesId, at } },            — downloads belong to this device:
+          f: { seriesId: { wifi, mob, full, up } },     per-series download settings (Wi-Fi on / mobile data off by default)
+          dir: { seriesId: folder name },               its sub-folder in the phone folder (js/local.js)
+          mine: { fileId: 1 } }                         auto copies the app wrote into the phone folder (only these are auto-cleared)
+   Series 'L:<folder>' (src 'local') are folders added on the phone; they and their progress are not synced. */
 (function () {
   var KEY = 'alp.v1', SCHEMA = 1;
-  function blank() { return { schema: SCHEMA, acct: null, settings: { theme: 'midnight', tint: true }, su: 0, series: {}, prog: {}, lib: null, now: null, ui: { tab: 'listen' }, dl: { mob: 0, kept: {} } }; }
+  function blank() { return { schema: SCHEMA, acct: null, settings: { theme: 'midnight', tint: true }, su: 0, series: {}, prog: {}, lib: null, now: null, ui: { tab: 'listen' }, dl: { kept: {}, f: {}, dir: {}, mine: {} } }; }
   var S = {
     d: null, dirty: false,
     load: function () {
@@ -20,7 +24,7 @@
       var d = this.d, b = blank();
       Object.keys(b).forEach(function (k) { if (d[k] === undefined) d[k] = b[k]; });
       if (!d.ui) d.ui = { tab: 'listen' };
-      if (!d.dl.kept) d.dl.kept = {};
+      ['kept', 'f', 'dir', 'mine'].forEach(function (k) { if (!d.dl[k]) d.dl[k] = {}; });
       d.schema = SCHEMA;
     },
     reset: function (acct) { var ui = this.d.ui, st = this.d.settings, dl = this.d.dl; this.d = blank(); this.d.acct = acct; this.d.ui = ui; this.d.settings = st; this.d.dl = dl; this.persist(); },
@@ -61,7 +65,12 @@
       if ((r.su || 0) > (L.su || 0)) { L.settings = r.settings; L.su = r.su; }
       this.dirty = true; this.persist();
     },
-    exportData: function () { var c = JSON.parse(JSON.stringify(this.d)); delete c.ui; delete c.dl; return c; }
+    exportData: function () {
+      var c = JSON.parse(JSON.stringify(this.d)); delete c.ui; delete c.dl;
+      ['series', 'prog'].forEach(function (t) { Object.keys(c[t] || {}).forEach(function (k) { if (k.indexOf('L:') === 0) delete c[t][k]; }); });
+      if (c.now && String(c.now.s).indexOf('L:') === 0) delete c.now;
+      return c;
+    }
   };
   window.Store = S;
 })();

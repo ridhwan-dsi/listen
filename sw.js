@@ -4,8 +4,8 @@
    2. Audio route media/<fileId>?m=k|t&k=<apiKey>&t=<token>: an offline copy if saved (cache 'alp-audio', never wiped by
       updates), otherwise streamed from Drive — with the signed-in token, else the API key — passing Range through.
    Bump SHELL with every release (same number as appVersion in js/config.js). */
-var SHELL = 'alp-shell-v2', AUDIO = 'alp-audio', PART = 'alp-part';   // PART: half-finished downloads (see player.js)
-var FILES = ['./', 'index.html', 'css/app.css', 'js/config.js', 'js/store.js', 'js/sync.js', 'js/drive.js', 'js/ui.js', 'js/player.js', 'js/app.js',
+var SHELL = 'alp-shell-v3', AUDIO = 'alp-audio', PART = 'alp-part';   // PART: half-finished downloads (see player.js)
+var FILES = ['./', 'index.html', 'css/app.css', 'js/config.js', 'js/store.js', 'js/sync.js', 'js/drive.js', 'js/ui.js', 'js/local.js', 'js/player.js', 'js/app.js',
   'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/icon-maskable-512.png', 'icons/apple-touch-icon.png'];
 var FONTS = 'alp-fonts';
 
@@ -39,7 +39,7 @@ function media(req, url) {
     if (hit) return rangeFrom(hit, range);
     var api = 'https://www.googleapis.com/drive/v3/files/' + id + '?alt=media&supportsAllDrives=true';
     var tok = url.searchParams.get('t'), k = url.searchParams.get('k'), h = range ? { Range: range } : {};
-    var withKey = function () { return k ? fetch(api + '&key=' + encodeURIComponent(k), { headers: h }) : Promise.resolve(new Response(null, { status: 401 })); };
+    var withKey = function () { return k ? fetch(api + '&key=' + encodeURIComponent(k), { headers: h, referrerPolicy: 'no-referrer-when-downgrade' }) : Promise.resolve(new Response(null, { status: 401 })); };   // full Referer: the key is limited to /listen/*
     if (!tok) return withKey();
     return fetch(api, { headers: Object.assign({ Authorization: 'Bearer ' + tok }, h) }).then(function (r) {
       return r.ok ? r : withKey().then(function (r2) { return r2.ok ? r2 : r; });   // public file with an expired token still plays
