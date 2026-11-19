@@ -262,3 +262,20 @@ svg.i{width:20px;height:20px;stroke:var(--tx);fill:none;stroke-width:2;stroke-li
 /* v3: series Downloads button lit when something is set to download; lecture line marker */
 .cb.dlon{color:var(--ac)}.cb.dlon svg{width:22px;height:22px}
 .fl .tx p .ofk{margin-left:6px;vertical-align:-1px}
+/* download card (series + its Downloads page) */
+.dlc{margin:12px 16px 4px;border-radius:18px;background:var(--s1);padding:12px 14px 14px;border:1px solid var(--ln)}
+.dlc .dlh{display:flex;align-items:center;gap:10px;cursor:pointer}
+.dlc .dlh .tx{flex:1;min-width:0;font-size:14px;font-weight:800}
+.dlc .dlh small{display:block;font-size:12px;font-weight:600;color:var(--mu);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dlc .dlh>b{font-size:15px;font-weight:800;font-variant-numeric:tabular-nums}
+.dlc .dot{width:9px;height:9px;border-radius:50%;flex:none;background:var(--mu)}
+.dlc .dot.run{background:var(--ac);animation:dlp 1.2s ease-in-out infinite}.dlc .dot.ok{background:#3fbf7f}.dlc .dot.wait{background:#e5a83b}.dlc .dot.bad{background:#e5534b}
+@keyframes dlp{50%{opacity:.35}}
+.dlbar{height:6px;border-radius:3px;background:var(--ln);margin-top:10px;overflow:hidden}.dlbar b{display:block;height:100%;background:var(--ac);transition:width .35s}
+.dlbar.sm{height:4px;margin-top:6px}
+.dlf{margin-top:14px}.dlf .r{display:flex;gap:10px;font-size:13px;font-weight:700}.dlf .n{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.dlf b{font-variant-numeric:tabular-nums}
+.dlf small,.dls{display:block;font-size:12px;color:var(--mu);margin-top:5px}
+.dls{margin-top:10px;color:var(--tx);opacity:.85}
+.dlb{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}.dlb .btn2{margin-left:0;display:inline-flex;align-items:center;gap:6px}.dlb .btn2 svg{width:15px;height:15px;stroke:currentColor}
+.dlc.min{padding-bottom:12px}
+.dk .dlc{margin:4px 0 12px;max-width:640px}

@@ -4,7 +4,7 @@
    2. Audio route media/<fileId>?m=k|t&k=<apiKey>&t=<token>: an offline copy if saved (cache 'alp-audio', never wiped by
       updates), otherwise streamed from Drive — with the signed-in token, else the API key — passing Range through.
    Bump SHELL with every release (same number as appVersion in js/config.js). */
-var SHELL = 'alp-shell-v3', AUDIO = 'alp-audio', PART = 'alp-part';   // PART: half-finished downloads (see player.js)
+var SHELL = 'alp-shell-v4', AUDIO = 'alp-audio', PART = 'alp-part';   // PART: half-finished downloads (see player.js)
 var FILES = ['./', 'index.html', 'css/app.css', 'js/config.js', 'js/store.js', 'js/sync.js', 'js/drive.js', 'js/ui.js', 'js/local.js', 'js/player.js', 'js/app.js',
   'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/icon-maskable-512.png', 'icons/apple-touch-icon.png'];
 var FONTS = 'alp-fonts';

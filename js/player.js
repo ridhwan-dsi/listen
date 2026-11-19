@@ -150,7 +150,7 @@
        Never holds up listening: waits while the streamed lecture has under 45 s buffered.
        Network: per series (Store.d.dl.f[sid] = { wifi, mob, full, up }): Wi-Fi on, mobile data off by default.
        Kept downloads never give up (retry every few minutes); a sign-in that ran out waits instead of failing. */
-    q: [], running: null,
+    q: [], running: null, force: {}, paused: {},   // per series, this session only: Force start (ignores the Wi-Fi rule and the buffering pause, goes first) / Pause
     kept: function (fid) { return !!S.d.dl.kept[fid]; },
     cfg: function (sid) { var f = S.d.dl.f[sid] || {}; return { wifi: f.wifi == null ? 1 : f.wifi, mob: f.mob ? 1 : 0, full: f.full ? 1 : 0, up: f.up ? 1 : 0 }; },
     setCfg: function (sid, patch) { var f = S.d.dl.f[sid] = S.d.dl.f[sid] || {}; Object.keys(patch).forEach(function (k) { f[k] = patch[k]; }); S.persist(); },
@@ -159,6 +159,8 @@
     /* why this series may not download right now: 'off' | 'wifi' (waiting for Wi-Fi) | 'mob' (Wi-Fi not allowed) | 'none' */
     blockedFor: function (sid) {
       if (navigator.onLine === false) return 'off';
+      if (this.paused[sid]) return 'pause';
+      if (this.force[sid]) return null;
       var c = this.cfg(sid), t = this.net();
       if (!c.wifi && !c.mob) return 'none';
       if (t === 'cellular') return c.mob ? null : 'wifi';
@@ -212,7 +214,7 @@
     pick: function () {
       var now = Date.now(), self = this, fs = this.s ? this.files() : [], i = this.idx(), nx = i >= 0 && fs[i + 1] ? fs[i + 1].id : null;
       var ok = this.q.filter(function (x) { var d = self.dl[x.f]; return d && !d.fail && !d.w && !(d.next > now); });
-      ok.sort(function (a, b) { return (b.f === nx) - (a.f === nx) || b.k - a.k || (a.k ? a.at - b.at : a.o - b.o); });
+      ok.sort(function (a, b) { return (!!self.force[b.s]) - (!!self.force[a.s]) || (b.f === nx) - (a.f === nx) || b.k - a.k || (a.k ? a.at - b.at : a.o - b.o); });
       return ok[0] || null;
     },
     pump: function () {
@@ -229,6 +231,7 @@
       this.running = job; App.state();
       this.fetchFile(job).then(function () {
         self.q = self.q.filter(function (x) { return x !== job; }); delete self.dl[job.f];
+        if (!self.q.some(function (x) { return x.s === job.s; })) { delete self.force[job.s]; delete self.paused[job.s]; }
       }, function (e) {
         var d = self.dl[job.f];
         if (e === 'cancel' || !d) { self.dropParts(job.f); return; }
@@ -252,15 +255,18 @@
       return key().then(function (r) { return r && r.ok ? r : noAuth(r); });
     },
     /* wait while the lecture being streamed has under 45 s buffered ahead */
-    calm: function () {
+    calm: function (sid, d, live) {
       var self = this;
       return new Promise(function (res) {
         (function chk() {
-          if (!self.s || a.paused || self.cached[self.f] || self.blobUrl) return res();
-          var b = a.buffered, t = a.currentTime, ahead = 0, d = self.dur();
+          var stop = false; try { live(); } catch (e) { stop = true; }
+          if (stop || self.force[sid]) { d.ph = 'get'; return res(); }
+          if (!self.s || a.paused || self.cached[self.f] || self.blobUrl) { d.ph = 'get'; return res(); }
+          var b = a.buffered, t = a.currentTime, ahead = 0, du = self.dur();
           for (var i = 0; i < b.length; i++) if (b.start(i) <= t + 1 && b.end(i) > t) ahead = b.end(i) - t;
-          if (ahead >= 45 || (d && t + ahead >= d - 1)) return res();
-          setTimeout(chk, 3000);
+          if (ahead >= 45 || (du && t + ahead >= du - 1)) { d.ph = 'get'; return res(); }
+          if (d.ph !== 'calm') { d.ph = 'calm'; self.tick(true); }
+          setTimeout(chk, 1500);
         })();
       });
     },
@@ -280,7 +286,7 @@
     },
     fetchFile: function (job) {
       var self = this, fid = job.f, d = this.dl[fid], mode = this.mode(job.s), PB = BASE + 'part/' + fid + '/', CH = this.CH;
-      var live = function () { if (!self.inQ(fid) || self.dl[fid] !== d) throw 'cancel'; if (self.blockedFor(job.s)) throw 'wait'; };
+      var live = function () { if (!self.inQ(fid) || self.dl[fid] !== d) throw 'cancel'; if (self.blockedFor(job.s) || self.yieldFor(job.s)) throw 'wait'; };
       return caches.open(PART).then(function (pc) {
         return pc.keys().then(function (ks) {
           var have = {}, n = 0, tot = d.tot || 0;
@@ -294,7 +300,7 @@
             }).then(function (bs) {
               var sz = 0; bs.forEach(function (b) { sz += b.size; });
               if (sz !== tot) { drop(urls); throw new Error('size ' + sz + ' ≠ ' + tot); }   // never save a cut-short file
-              live();
+              live(); d.ph = 'save'; self.tick(true);
               return self.save(job, bs, d.type || 'audio/mpeg');
             }).then(function () { drop(urls); });
           };
@@ -302,7 +308,7 @@
             live();
             if (tot && n * CH >= tot) return finish();
             if (tot && have[n]) { n++; d.got = Math.min(tot, n * CH); return step(); }
-            return self.calm().then(function () {
+            return self.calm(job.s, d, live).then(function () {
               live();
               return self.get(fid, mode, n * CH, n * CH + CH - 1).catch(function (e) { if (e === 'auth') throw e; throw navigator.onLine === false ? 'wait' : new Error('network'); });
             }).then(function (r) {
@@ -310,10 +316,11 @@
               if (!r.ok) throw new Error('HTTP ' + r.status);
               d.type = (r.headers.get('Content-Type') || d.type || 'audio/mpeg').split(';')[0];
               var m = /\/(\d+)\s*$/.exec(r.headers.get('Content-Range') || '');
-              return r.blob().then(function (b) {
+              return self.body(r, d, r.status === 200 ? 0 : n * CH, live).then(function (b) {
                 live();
                 if (r.status === 200) {   // the server sent the whole file in one go
                   if (tot && b.size !== tot) throw new Error('got ' + b.size + ' of ' + tot + ' bytes');
+                  d.ph = 'save';
                   return self.save(job, [b], d.type).then(function () { drop(Object.keys(have).map(function (k) { return PB + k; })); });
                 }
                 if (m) tot = d.tot = +m[1];
@@ -328,6 +335,65 @@
           return step();
         });
       });
+    },
+    /* read a response as it arrives, so the progress bar and speed move within each 8 MB piece */
+    body: function (r, d, base, live) {
+      var self = this;
+      if (!r.body || !r.body.getReader) return r.blob();
+      var rd = r.body.getReader(), parts = [], got = 0, type = (r.headers.get('Content-Type') || '').split(';')[0];
+      d.ph = 'get';
+      return (function more() {
+        return rd.read().then(function (x) {
+          if (x.done) return new Blob(parts, { type: type });
+          parts.push(x.value); got += x.value.byteLength; self.rate(d, x.value.byteLength);
+          d.got = d.tot ? Math.min(d.tot, base + got) : base + got;
+          try { live(); } catch (e) { rd.cancel().catch(function () {}); throw e; }
+          self.tick(); return more();
+        });
+      })();
+    },
+    rate: function (d, b) {
+      var now = Date.now(); if (!d.rt || now - d.rt > 10000) { d.rt = now; d.rb = 0; }
+      d.rb += b; var dt = now - d.rt;
+      if (dt >= 1000) { var v = d.rb / dt * 1000; d.spd = d.spd ? d.spd * 0.6 + v * 0.4 : v; d.rt = now; d.rb = 0; }
+    },
+    /* light refresh of the download card (no full re-render), at most every 400 ms */
+    tick: function (now) { var t = Date.now(); if (!now && t - (this.tk || 0) < 400) return; this.tk = t; if (window.App && App.dlTick) App.dlTick(); },
+    /* a running download of another series steps aside (keeping its pieces) while a forced series has something to fetch */
+    yieldFor: function (sid) {
+      if (this.force[sid]) return false; var self = this;
+      return this.q.some(function (x) { var d = self.dl[x.f]; return self.force[x.s] && d && !d.fail && !d.w && !self.paused[x.s]; });
+    },
+    forceStart: function (sid) {
+      var self = this, tok = !!(window.Sync && Sync.token());
+      this.force[sid] = 1; delete this.paused[sid];
+      this.q.forEach(function (x) { if (x.s !== sid) return; var d = self.dl[x.f]; if (!d) return; d.fail = 0; d.tries = 0; d.next = 0; if (d.w !== 'auth' || tok) d.w = null; });
+      this.pump(); App.state();
+    },
+    pauseSer: function (sid) { this.paused[sid] = 1; delete this.force[sid]; this.pump(); App.state(); },
+    resumeSer: function (sid) { delete this.paused[sid]; this.kick(); },
+    /* what the download card on a series shows: overall progress (lectures saved + bytes), the current lecture and why it is or isn't moving */
+    card: function (sid) {
+      var self = this, mine = this.q.filter(function (x) { return x.s === sid; });
+      if (!mine.length) return null;
+      var qd = {}, o = { n: 0, done: 0, totB: 0, gotB: 0, left: mine.length }, now = Date.now();
+      mine.forEach(function (x) { qd[x.f] = x; });
+      D.files(sid).forEach(function (f) {
+        var inq = qd[f.id]; if (!inq && !self.cached[f.id]) return;
+        var d = self.dl[f.id] || {}, sz = f.sz || d.tot || 0;
+        o.n++; o.totB += sz;
+        if (!inq) { o.done++; o.gotB += sz; } else o.gotB += Math.min(sz, d.got || 0);
+      });
+      var run = this.running && this.running.s === sid ? this.running : null;
+      var cur = run || mine.slice().sort(function (a, b) { return b.k - a.k || a.at - b.at; })[0], d = this.dl[cur.f] || {};
+      o.fid = cur.f; o.got = d.got || 0; o.tot = d.tot || this.size(sid, cur.f); o.spd = run && d.ph !== 'calm' ? d.spd || 0 : 0; o.err = d.err || '';
+      o.force = !!this.force[sid]; o.paused = !!this.paused[sid];
+      var allFail = mine.every(function (x) { return (self.dl[x.f] || {}).fail; });
+      o.k = navigator.onLine === false ? 'off' : run ? (d.ph === 'calm' ? 'calm' : d.ph === 'save' ? 'save' : 'run') : o.paused ? 'pause'
+        : allFail ? 'fail' : this.running ? 'other' : d.w ? d.w : d.next > now ? 'retry' : 'queued';
+      o.secs = d.next > now ? Math.ceil((d.next - now) / 1000) : 0;
+      o.mob = o.force && this.net() === 'cellular' && !this.cfg(sid).mob;
+      return o;
     },
     dropParts: function (fid) {
       if (!window.caches) return Promise.resolve(); var PB = BASE + 'part/' + fid + '/';

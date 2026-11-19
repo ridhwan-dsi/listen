@@ -168,6 +168,28 @@ async function phoneFiles(page, dir) {
   ok(await until(page, () => !!Player.cached.sh5), 'ticking Mobile data lets it download');
   await page.evaluate(() => { __setNet('wifi'); Player.setCfg('SHARED0001', { mob: 0 }); });
 
+  console.log('5b. Download card on the series screen: status, pause/resume, force start');
+  await page.evaluate(() => __setNet('cellular'));
+  drive.sh6 = { name: '06 Card.mp3', parents: ['SHARED0001'], size: 200 * KB, pub: true, ct: Date.now() };
+  drive.sh7 = { name: '07 Card two.mp3', parents: ['SHARED0001'], size: 100 * KB, pub: true, ct: Date.now() };
+  await page.evaluate(() => Drive.refreshFolder('SHARED0001', 'k'));
+  await page.evaluate(() => { history.pushState({}, ''); }); await page.click('[data-act="tab"][data-t="shared"]'); await page.click('[data-act="ser"][data-id="SHARED0001"]');
+  ok(await until(page, () => { const c = document.querySelector('.dlc'); return c && c.dataset.k === 'wifi'; }), 'card at the top says it is waiting for Wi-Fi');
+  const ct = await page.innerText('.dlc');
+  ok(/Waiting for Wi-Fi/.test(ct) && /\d+%/.test(ct) && /of \d+ lectures/.test(ct) && /06 Card|Card/.test(ct), 'card shows total %, lectures, current lecture and status');
+  await page.screenshot({ path: '/tmp/dlcard-wait.png' });
+  await page.click('[data-act="dlPause"]');
+  ok(await until(page, () => (document.querySelector('.dlc') || {}).dataset?.k === 'pause' && !!document.querySelector('[data-act="dlResume"]')), 'Pause → "Downloads paused" with Resume');
+  await page.click('[data-act="dlResume"]');
+  ok(await until(page, () => (document.querySelector('.dlc') || {}).dataset?.k === 'wifi'), 'Resume → back to waiting for Wi-Fi');
+  await page.click('.dlh'); ok(await until(page, () => !!document.querySelector('.dlc.min') && !document.querySelector('.dlf')), 'card collapses to one line');
+  await page.click('.dlh'); ok(await until(page, () => !!document.querySelector('.dlf')), 'and expands again');
+  await page.click('[data-act="dlForce"]');
+  ok(await until(page, () => !!Player.cached.sh6 && !!Player.cached.sh7, null, 20000), 'Force start downloads despite the Wi-Fi rule');
+  ok(await until(page, () => !document.querySelector('.dlc') && !Object.keys(Player.force).length), 'card goes away and the force ends when done');
+  await page.evaluate(() => __setNet('wifi'));
+  await home(page);
+
   console.log('6. Settings: no mobile-data switch; phone folder row');
   await page.click('.av'); await sleep(200);
   const st = await page.innerText('.scr');

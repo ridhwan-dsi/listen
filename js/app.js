@@ -238,7 +238,7 @@
   }
 
   /* ---------- a series' Downloads page (the one place for download settings) ---------- */
-  function wtxt(w) { return { off: 'Waiting for connection', wifi: 'Waiting for Wi-Fi', mob: 'Waiting — Wi-Fi is switched off for this folder', none: 'Paused — tick Wi-Fi or Mobile data', auth: 'Waiting for Google sign-in — tap anywhere to continue', folder: 'Waiting for the phone folder' }[w] || ''; }
+  function wtxt(w) { return { off: 'Waiting for connection', wifi: 'Waiting for Wi-Fi', mob: 'Waiting — Wi-Fi is switched off for this folder', none: 'Paused — tick Wi-Fi or Mobile data', auth: 'Waiting for Google sign-in — tap anywhere to continue', folder: 'Waiting for the phone folder', pause: 'Paused' }[w] || ''; }
   function folderRow(sid) {
     if (!Local.supported()) return '<div class="it">' + ic('folder') + '<div class="tx">Saved inside the app<small>This browser can’t save into a phone folder (needs Chrome on Android or a computer)</small></div></div>';
     if (!Local.root) return '<div class="it" data-act="pickFolder">' + ic('folder') + '<div class="tx">Saved inside the app<small>Choose a phone folder to keep lectures as files you can see and add to</small></div><span class="btn2">Choose</span></div>';
@@ -251,11 +251,42 @@
     return '<div class="it"><div class="tx">' + E(f ? UI.title(f.n) : 'Lecture') + '<small>' + E(st) + '</small>' + (run && d.tot ? '<div class="qbar"><b style="width:' + pc + '%"></b></div>' : '') + '</div>' +
       (d.fail ? '<span class="btn2" data-act="dlRetry" data-id="' + x.f + '">Retry</span>' : '') + '</div>';
   }
+  /* ---------- download card (top of a series and its Downloads page while something is downloading) ---------- */
+  function pctOf(a, b) { return b ? Math.min(100, Math.floor(a / b * 100)) : 0; }
+  function mbs(b) { return b < 1e6 ? Math.round(b / 1e3) + ' KB' : (b / 1e6).toFixed(b < 1e8 ? 1 : 0) + ' MB'; }
+  function eta(sec) { return sec < 60 ? 'under a minute left' : sec < 3600 ? 'about ' + Math.round(sec / 60) + ' min left' : 'about ' + (sec / 3600).toFixed(1).replace('.0', '') + ' h left'; }
+  function dlcVals(sid, c) {
+    var f = fileOf(sid, c.fid), st;
+    if (c.k === 'run') st = 'Downloading' + (c.spd ? ' · ' + mbs(c.spd) + '/s · ' + eta((c.totB - c.gotB) / c.spd) : '') + (c.mob ? ' · using mobile data' : '');
+    else st = { calm: 'Held back so the lecture you are streaming can buffer', save: 'Saving the finished lecture…', pause: 'Paused by you', other: 'Waiting — another folder is downloading',
+      fail: 'Stopped — it failed 5 times', retry: 'Will try again in ' + c.secs + ' s', queued: 'Starting…' }[c.k] || wtxt(c.k) || c.k;
+    if ((c.k === 'retry' || c.k === 'fail') && c.err) st += ' (' + c.err + ')';
+    return { tb: pctOf(c.gotB, c.totB), tp: pctOf(c.gotB, c.totB) + '%', tt: c.done + ' of ' + c.n + ' lectures · ' + mbs(c.gotB) + ' of ' + mbs(c.totB),
+      fb: pctOf(c.got, c.tot), fp: pctOf(c.got, c.tot) + '%', ft: (c.tot ? mbs(c.got) + ' of ' + mbs(c.tot) : 'size not known yet'), fn: f ? UI.title(f.n) : 'Lecture', st: st };
+  }
+  function dlCard(sid, onPage) {
+    var c = P.card(sid); if (!c) return '';
+    var v = dlcVals(sid, c), min = !!U.dlcMin, moving = c.k === 'run' || c.k === 'save';
+    var dot = moving ? 'run' : c.k === 'fail' ? 'bad' : c.k === 'calm' || c.k === 'queued' ? 'ok' : 'wait';
+    var h = '<div class="dlc' + (min ? ' min' : '') + '" data-id="' + sid + '" data-k="' + c.k + '">' +
+      '<div class="dlh" data-act="dlcTg"><span class="dot ' + dot + '"></span><div class="tx">' + (moving ? 'Downloading' : c.k === 'pause' ? 'Downloads paused' : c.k === 'fail' ? 'Downloads stopped' : 'Downloads waiting') +
+      '<small data-f="' + (min ? 'st' : 'tt') + '">' + E(min ? v.st : v.tt) + '</small></div><b data-f="tp">' + v.tp + '</b><span class="chev' + (min ? '' : ' up') + '">' + ic('down') + '</span></div>' +
+      '<div class="dlbar"><b data-f="tb" style="width:' + v.tb + '%"></b></div>';
+    if (!min) {
+      h += '<div class="dlf"><div class="r"><span class="n" data-f="fn">' + E(v.fn) + '</span><b data-f="fp">' + v.fp + '</b></div><div class="dlbar sm"><b data-f="fb" style="width:' + v.fb + '%"></b></div>' +
+        '<small data-f="ft">' + E(v.ft) + '</small></div><div class="dls" data-f="st">' + E(v.st) + '</div><div class="dlb">' +
+        (c.paused ? '<span class="btn2" data-act="dlResume" data-id="' + sid + '">Resume</span>' : (moving ? '' : '<span class="btn2" data-act="dlForce" data-id="' + sid + '">' + ic('dl') + 'Force start</span>') +
+          '<span class="btn2 gh" data-act="dlPause" data-id="' + sid + '">Pause</span>') +
+        (onPage ? '' : '<span class="btn2 gh" data-act="fdl" data-id="' + sid + '">Details</span>') + '</div>';
+    }
+    return h + '</div>';
+  }
   function viewFolderDl(v) {
     var sid = v.id, c = P.cfg(sid), r = S.ser(sid) || {}, loc = Local.isLocal(sid), fs = D.files(sid);
     var on = fs.filter(function (x) { return P.cached[x.id]; }), onB = 0, allB = 0, win = loc ? [] : P.window(sid), wb = 0;
     on.forEach(function (x) { onB += x.sz || 0; }); fs.forEach(function (x) { allB += x.sz || 0; }); win.forEach(function (x) { wb += x.sz || 0; });
     var h = '<div class="hd">' + (desk() ? '' : '<div class="ib" data-act="back">' + ic('back') + '</div>') + '<div class="t"><small>' + E(name(sid)) + '</small><h1 style="font-size:24px">Downloads</h1></div></div>';
+    h += dlCard(sid, true);
     h += '<div class="grp"><div class="it">' + ic('dl') + '<div class="tx">' + (loc ? fs.length + ' lectures on this phone' : on.length + ' of ' + fs.length + ' lectures on this device') + '<small>' + UI.mb(onB) + (loc ? '' : ' of ' + UI.mb(allB)) + '</small></div></div>' + folderRow(sid) + '</div>';
     if (!loc) {
       var left = 0; fs.forEach(function (x) { if (!P.cached[x.id]) left += x.sz || 0; });
@@ -324,6 +355,7 @@
       '<div class="acts">' + (fs.length ? '<div class="res" data-act="resume" data-id="' + sid + '">' + (resumeTxt === 'Pause' ? UI.PAUSE : UI.PLAY) + resumeTxt + '</div>' : '<div class="res sec2">No audio files yet</div>') +
       '<div class="cb' + (dOn ? ' dlon' : '') + '" data-act="fdl" data-id="' + sid + '" title="Downloads">' + (dOn ? UI.DLK : ic('dl')) + '</div>' + '<div class="cb' + (r.star ? ' starred' : '') + '" data-act="star" data-id="' + sid + '" title="Star">' + ic('star') + '</div>' +
       (loc ? '' : '<div class="cb" data-act="share" data-id="' + sid + '" title="Share">' + ic('shr') + '</div>') + '</div></div>';
+    h += dlCard(sid, false);
     var early = [], late = [];
     fs.forEach(function (x, i) { (D.late(sid, x) ? late : early).push([x, i]); });
     var cur = P.s === sid ? P.f : (s.started ? P.resumeFile(sid) : null);
@@ -587,6 +619,15 @@
       Local.choose().then(function () { return P.scanCached(); }).then(function () { Local.match(); P.resumeQueue(); upAll(); App.toast('Phone folder: ' + Local.name()); render(); }, function () {});
     },
     reconnect: function () { Local.reconnect().then(function () { return P.scanCached(); }).then(function () { Local.match(); P.resumeQueue(); upAll(); render(); }, function () {}); },
+    dlcTg: function () { U.dlcMin = !U.dlcMin; S.saveUi(); render(); },
+    dlForce: function (el) {
+      var sid = el.dataset.id;
+      if (navigator.onLine === false) return App.toast('You are offline — downloads start when you are back online');
+      P.forceStart(sid); var c = P.card(sid);
+      App.toast(c && c.k === 'auth' ? 'Waiting for Google sign-in — tap anywhere to continue' : 'Starting now' + (P.net() === 'cellular' && !P.cfg(sid).mob ? ' (using mobile data this time)' : ''));
+    },
+    dlPause: function (el) { P.pauseSer(el.dataset.id); },
+    dlResume: function (el) { P.resumeSer(el.dataset.id); },
     dlNow: function () { P.kick(); Up.q.forEach(function (s) { if (Up.st[s]) Up.st[s].next = 0; }); Up.pump(); App.toast('Trying now'); },
     checkNew: function (el) {
       var id = el.dataset.id, mode = P.mode(id);
@@ -731,6 +772,7 @@
       function (e) { v.loading = false; v.err = e.message === 'notoken' ? 'Sign-in expired — tap the folder again.' : 'Could not read this folder (' + (e.message || 'error') + ').'; render(); });
   }
 
+  setInterval(function () { if (root.querySelector('.dlc')) App.dlTick(); }, 1000);   // countdowns on the download card
   document.addEventListener('click', function (e) {
     var el = e.target.closest('[data-act]'); if (!el) return;
     var fn = A[el.dataset.act]; if (!fn) return;
@@ -773,6 +815,16 @@
   window.App = {
     render: schedule,
     state: schedule,
+    /* live numbers on the download card(s) without re-rendering the screen; re-render when the card's state changes */
+    dlTick: function () {
+      var els = root.querySelectorAll('.dlc');
+      for (var i = 0; i < els.length; i++) {
+        var el = els[i], sid = el.dataset.id, c = P.card(sid);
+        if (!c || c.k !== el.dataset.k) { schedule(); return; }
+        var v = dlcVals(sid, c), q = el.querySelectorAll('[data-f]');
+        for (var j = 0; j < q.length; j++) { var k = q[j].dataset.f; if (k === 'tb' || k === 'fb') q[j].style.width = v[k] + '%'; else if (q[j].textContent !== v[k]) q[j].textContent = v[k]; }
+      }
+    },
     syncChanged: function () { var t = top(); if (t && t.t === 'settings') schedule(); },
     remoteMerged: function () {
       if (!P.s && S.d.now && S.d.now.s) P.restore(S.d.now.s, S.d.now.f);
